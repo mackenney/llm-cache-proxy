@@ -5,6 +5,7 @@ use anyhow::Result;
 
 use lcp_core::Cache;
 
+use crate::proxy::AppState;
 use crate::router::build_router;
 
 /// Runtime configuration for the proxy server.
@@ -19,6 +20,8 @@ pub struct ServerConfig {
     pub openai_upstream: Option<String>,
     pub openrouter_upstream: Option<String>,
     pub gemini_upstream: Option<String>,
+    /// Bounded channel capacity for streaming response chunks. Default: 32.
+    pub stream_channel_capacity: usize,
 }
 
 impl ServerConfig {
@@ -48,7 +51,6 @@ impl ServerConfig {
 pub async fn serve(config: ServerConfig) -> Result<()> {
     let addr = config.addr;
     let timeout_seconds = config.timeout_seconds;
-    let config = Arc::new(config);
 
     let mut cb = reqwest::Client::builder()
         // Never negotiate compression — upstreams must return plain SSE.
@@ -60,7 +62,13 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
     }
     let client = Arc::new(cb.build()?);
 
-    let app = build_router(config, client);
+    let state = AppState {
+        config: Arc::new(config),
+        client,
+        background_writes: Arc::new(tokio::sync::Mutex::new(tokio::task::JoinSet::new())),
+    };
+
+    let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(addr = %listener.local_addr()?, "lcp proxy listening");
     axum::serve(listener, app).await?;

@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use lcp_core::Cache;
+use lcp_server::proxy::AppState;
 use lcp_server::router::build_router;
 use lcp_server::server::ServerConfig;
 use tokio::task::JoinHandle;
@@ -27,6 +28,7 @@ pub struct TestHarness {
     cache: Cache,
     proxy_addr: SocketAddr,
     proxy_handle: Option<JoinHandle<()>>,
+    app_state: AppState,
 }
 
 impl TestHarness {
@@ -62,6 +64,11 @@ impl TestHarness {
             let _ = h.await;
         }
         // self.mock is dropped here, triggering MockUpstream::drop()
+    }
+
+    /// Wait for all background cache writes to complete.
+    pub async fn wait_for_writes(&self) {
+        self.app_state.wait_for_pending_writes().await;
     }
 }
 
@@ -117,6 +124,7 @@ impl TestHarnessBuilder {
             openai_upstream: Some(mock_url.clone()),
             openrouter_upstream: Some(mock_url.clone()),
             gemini_upstream: Some(mock_url.clone()),
+            stream_channel_capacity: 32,
         };
 
         let client = Arc::new(
@@ -127,7 +135,14 @@ impl TestHarnessBuilder {
                 .build()
                 .expect("build reqwest client"),
         );
-        let app = build_router(Arc::new(config.clone()), client);
+
+        let app_state = AppState {
+            config: Arc::new(config),
+            client,
+            background_writes: Arc::new(tokio::sync::Mutex::new(tokio::task::JoinSet::new())),
+        };
+
+        let app = build_router(app_state.clone());
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -143,6 +158,7 @@ impl TestHarnessBuilder {
             cache,
             proxy_addr,
             proxy_handle: Some(proxy_handle),
+            app_state,
         }
     }
 }

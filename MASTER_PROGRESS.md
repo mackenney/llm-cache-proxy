@@ -17,6 +17,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | Plan | What |
 |---|---|
 | [test1](plans/test1/PROGRESS.md) | MockUpstream + spec invariant test suite (cache hit/miss, bypass, tracing, admin endpoints) |
+| [fixups1](plans/fixups1/PROGRESS.md) | Eliminate yield_now race, move channel capacity to ServerConfig, rename RecordedRequest.path → uri |
 
 ---
 
@@ -50,4 +51,4 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | ID | Issue | Plan |
 |---|---|---|
-| TEST-1 | No `MockUpstream` — blocks spec invariant and integration tests for proxy behavior | [test1](plans/test1/PROGRESS.md) |
+| _(none)_ | | |

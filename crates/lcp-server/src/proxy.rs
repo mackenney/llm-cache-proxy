@@ -9,7 +9,8 @@ use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
+use tokio::task::JoinSet;
 
 use lcp_core::{
     Provider, cache_key,
@@ -43,6 +44,14 @@ impl<T> Stream for ReceiverStream<T> {
 pub struct AppState {
     pub config: Arc<ServerConfig>,
     pub client: Arc<reqwest::Client>,
+    pub background_writes: Arc<Mutex<JoinSet<()>>>,
+}
+
+impl AppState {
+    pub async fn wait_for_pending_writes(&self) {
+        let mut set = self.background_writes.lock().await;
+        while set.join_next().await.is_some() {}
+    }
 }
 
 pub async fn handle(
