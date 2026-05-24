@@ -1,0 +1,33 @@
+[package]
+name = "lcp-tests"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+lcp-core = { workspace = true }
+lcp-server = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+futures-util = { workspace = true }
+axum = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+test-e2e = []
+
+[[test]]
+name = "spec"
+path = "spec/mod.rs"
+
+[[test]]
+name = "integration"
+path = "integration/mod.rs"
+
+[[test]]
+name = "e2e"
+path = "e2e/mod.rs"
+required-features = ["test-e2e"]

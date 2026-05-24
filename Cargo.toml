@@ -3,6 +3,7 @@ members = [
     "crates/lcp-core",
     "crates/lcp-server",
     "crates/lcp",
+    "tests",
 ]
 resolver = "2"
 
