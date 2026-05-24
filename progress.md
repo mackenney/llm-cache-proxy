@@ -1,30 +1,27 @@
 # Progress
 
 ## Status
-
 In Progress
 
 ## Tasks
+- [x] fc-cluster-b: fact-check lcp-server spec vs implementation (5 claims)
+- [x] fc-cluster-c: fact-check admin/stats endpoints and tracing response shape (5 claims)
 
-- [x] Repo scaffold: workspace, crates, .gitignore, rustfmt/clippy config
-- [x] SPEC.md: full behavioral contract (proxy, cache key, providers, endpoints)
-- [x] TESTING.md: test strategy and tier layout
-- [x] AGENTS.md: agent guidelines
-- [x] lcp-core skeleton: types, provider enum, hash (with unit tests), cache (with unit tests)
-- [x] lcp-server skeleton: axum router, proxy handler, stats endpoints
-- [x] lcp binary skeleton: CLI with clap
-- [ ] Fix compilation errors and verify `cargo check` passes
-- [ ] Write `tests/common/mock_upstream.rs`
-- [ ] Spec invariant tests: routing, cache hit/miss flow, header forwarding, bypass
-- [ ] Integration tests: full server, multi-provider, concurrent
-- [ ] crates/lcp-core/SPEC.md
-- [ ] crates/lcp-server/SPEC.md
+## Files Changed
+- artifacts/fc-cluster-b.md — written
+- artifacts/fc-cluster-c.md — written
 
 ## Notes
+Cluster B fact-check complete. Results:
+- Claim 1 (timeout in ServerConfig): REFUTED — no timeout field
+- Claim 2 (POST+GET routing): CONFIRMED
+- Claim 3 (record_trace on hit+miss): REFUTED — never called anywhere
+- Claim 4 (model extracted before put): CONFIRMED
+- Claim 5 (incoming body decompression): REFUTED — no decompression logic
 
-Reference implementation cloned at `references/llm-cache-proxy/` (git-ignored).
-Key observations from the reference:
-- Cache key: `sha256(method + "|" + path + "|" + body)` — no normalization, no stream stripping.
-  lcp improves on this with blake3 + normalized JSON (stream stripped, keys sorted).
-- Streaming: reference buffers full SSE body, replays verbatim. lcp does the same for v1.
-- Single-file FastAPI server (~300 LOC). lcp is structured as a proper workspace for extensibility.
+Cluster C fact-check complete. Results:
+- Claim 1 (by_model keyed as provider/model): REFUTED — groups by model only, no provider prefix (cache.rs:135)
+- Claim 2 (DELETE /cache returns cleared_entries): CONFIRMED — stats.rs:33
+- Claim 3 (trace response serializes status): REFUTED — trace endpoint entirely unimplemented; no route, no status field on CacheEntry, no trace_entries table
+- Claim 4 (DELETE /stats returns cleared:true): CONFIRMED — stats.rs:26
+- Claim 5 (proxy.rs omits x-lcp-key on bypass): REFUTED — x-lcp-key always emitted; also x-lcp-cache:MISS instead of BYPASS

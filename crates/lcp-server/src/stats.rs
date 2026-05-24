@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde_json::json;
@@ -31,6 +31,29 @@ pub async fn clear_stats(State(state): State<AppState>) -> impl IntoResponse {
 pub async fn clear_cache(State(state): State<AppState>) -> impl IntoResponse {
     match state.config.cache.clear_entries() {
         Ok(n) => Json(json!({"cleared_entries": n})).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+pub async fn get_trace(
+    State(state): State<AppState>,
+    Path(trace_id): Path<String>,
+) -> impl IntoResponse {
+    match state.config.cache.get_trace(&trace_id) {
+        Ok(entries) => {
+            let items: Vec<_> = entries
+                .iter()
+                .map(|e| {
+                    json!({
+                        "key": e.key,
+                        "created_at": e.created_at,
+                        "status": e.status,
+                        "hit_count": e.hit_count,
+                    })
+                })
+                .collect();
+            Json(json!({"trace_id": trace_id, "entries": items})).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

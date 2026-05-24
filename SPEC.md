@@ -5,61 +5,72 @@
 ## Purpose
 
 `lcp` is a localhost HTTP proxy that intercepts LLM API calls, caches
-successful responses on disk, and replays them on subsequent identical
-requests. The primary goals are eliminating repeated API spend during
-iterative development and providing a queryable log of exchanges for
-offline replay and inspection.
+successful responses on disk, and replays **reasonably equivalent** responses
+on subsequent matching requests. The primary goals are eliminating repeated
+API spend during iterative development and providing a queryable log of
+exchanges for offline replay and inspection.
+
+**Equivalence** is model- and transport-relative: a cached response for a
+given model and request is considered a valid replay even if minor formatting
+or metadata details differ across API versions or streaming transport
+variants. Per-token streaming cadence is intentionally not preserved on
+replay.
 
 ## Non-Goals (v1)
 
 - **System-wide transparent interception** (TLS MITM, `/etc/hosts` redirect,
   iptables redirect) — clients must point at lcp explicitly via an env var.
-- **Faithful chunk-timing replay** — cache hits return the full response body
-  in one shot; per-token streaming cadence is not preserved.
-- **Request/response interceptor plugins** (secret redaction, body mutation) —
-  deferred to a future extension point.
-- **Authentication / multi-user isolation** — lcp is a single-user local tool;
-  it has no auth and MUST NOT be exposed on a public interface.
+- **Plugin execution** — no request/response interceptor plugins run at
+  runtime in v1. The architecture exposes insertion points designed to
+  accommodate a future extension layer without structural changes.
+- **Authentication / multi-user isolation** — lcp is a single-user local
+  tool; it has no auth and MUST NOT be exposed on a public interface.
 - **TLS termination** — lcp speaks plain HTTP; clients set
   `ANTHROPIC_BASE_URL=http://127.0.0.1:9001/anthropic` (http, not https).
 
 ## Providers
 
-lcp routes requests to three upstream providers identified by URL prefix:
+lcp routes requests to four upstream providers identified by URL prefix. All
+proxied LLM API calls use HTTP POST.
 
 | Prefix | Default upstream | Env-var override |
 |---|---|---|
 | `anthropic` | `https://api.anthropic.com` | `LCP_ANTHROPIC_UPSTREAM` |
 | `openai` | `https://api.openai.com` | `LCP_OPENAI_UPSTREAM` |
 | `openrouter` | `https://openrouter.ai/api` | `LCP_OPENROUTER_UPSTREAM` |
+| `gemini` | `https://generativelanguage.googleapis.com` | `LCP_GEMINI_UPSTREAM` |
 
 A client sets:
 ```
 ANTHROPIC_BASE_URL=http://127.0.0.1:9001/anthropic
 OPENAI_BASE_URL=http://127.0.0.1:9001/openai
-OPENROUTER_BASE_URL=http://127.0.0.1:9001/openrouter  # also covers Gemini via OpenRouter
+OPENROUTER_BASE_URL=http://127.0.0.1:9001/openrouter
+GEMINI_BASE_URL=http://127.0.0.1:9001/gemini
 ```
 
 An unknown prefix MUST return HTTP 404.
 
 ## Cache Key
 
-The cache key is a BLAKE3 hex digest of the normalized request body,
-combined with the HTTP method and full path.
+The cache key is a BLAKE3 hex digest derived from the provider, model, and
+normalized request body. The provider is implicit in the path prefix
+(e.g. `/anthropic/v1/messages`). The model is a top-level field in the
+request body and MUST NOT be stripped during normalization — it is a
+first-class cache discriminator.
+
+Hash input:
+```
+blake3(method + "|" + path + "|" + normalized_body)
+```
 
 ### Normalization rules
 
 1. Parse the request body as JSON. If parsing fails, use the raw byte
    sequence as-is.
-2. Strip semantic-free fields: `stream`. These fields alter transport
-   behavior but not the logical response.
+2. Strip the `stream` field at any depth — it affects transport behavior but
+   not the logical response.
 3. Sort all JSON object keys recursively (depth-first).
 4. Serialize back to compact JSON.
-
-The method and path are concatenated with `|` separators before hashing:
-```
-blake3(method + "|" + path + "|" + normalized_body)
-```
 
 Headers are NOT included in the key. API key rotation MUST NOT bust the
 cache.
@@ -76,6 +87,42 @@ cache.
   Expired entries MUST be treated as misses on read; they are not deleted
   proactively (lazy expiry on access).
 
+### Schema (logical)
+
+```
+entries(
+  key          TEXT PRIMARY KEY,
+  status       INTEGER,
+  content_type TEXT,
+  provider     TEXT,        -- routing prefix (anthropic, openai, openrouter, gemini)
+  model        TEXT,        -- top-level `model` field from request body
+  exchange_json TEXT,       -- JSON array of {data: string, offset_ms: u64}
+  req_bytes    INTEGER,     -- total bytes of the original request body
+  resp_bytes   INTEGER,     -- total bytes across all chunks (computed at store time)
+  created_at   TEXT,        -- ISO-8601 UTC timestamp
+  hit_count    INTEGER      -- incremented on every cache hit
+)
+
+-- offset_ms is ms since first chunk arrived; recorded for observability,
+-- NOT used to pace replay.
+
+trace_entries(
+  trace_id  TEXT,
+  cache_key TEXT,
+  PRIMARY KEY (trace_id, cache_key)
+)
+-- many-to-many: a trace may span many cache entries;
+-- a cache entry may appear in many traces.
+
+stats(
+  k TEXT PRIMARY KEY,  -- e.g. 'hits', 'misses', 'bytes_served_from_cache'
+  v INTEGER NOT NULL
+)
+-- Accumulates counters independently of entries.
+-- Survives DELETE /cache; reset by DELETE /stats.
+-- Counters: 'hits', 'misses', 'bytes_served_from_cache'.
+```
+
 ## Proxy Behavior
 
 ### Cache miss
@@ -83,46 +130,122 @@ cache.
 1. Forward the request to the upstream, preserving method, path, query
    string, and all headers except `host`, `connection`, `transfer-encoding`,
    `accept-encoding`, and `content-length` (reqwest manages these).
-2. Stream the response body back to the client as it arrives.
-3. If the response status is `2xx`, store the exchange in the cache keyed by
-   the cache key computed above. The stored entry includes: status, content-type,
-   ordered response chunks with arrival timestamps (ms since first chunk), and
-   request metadata.
-4. The response MUST include `x-lcp-cache: MISS` and `x-lcp-key: <first-12-chars>`.
+2. Stream each response chunk back to the client as it arrives from
+   upstream; do not buffer the full response before forwarding.
+3. If the response status is `2xx`, store the exchange keyed by the cache
+   key computed above. The stored entry includes: status, content-type,
+   ordered response chunks with arrival timestamps (`offset_ms` since first
+   chunk), and request metadata.
+4. The response MUST include `x-lcp-cache: MISS` and
+   `x-lcp-key: <first-12-chars-of-key>`.
+5. The `stats` table MUST be updated: increment `misses` by 1.
 
 ### Cache hit
 
-1. Serve the stored response body to the client.
-2. The response MUST include `x-lcp-cache: HIT` and `x-lcp-key: <first-12-chars>`.
+1. Replay the stored response chunks to the client sequentially at full
+   speed — no artificial inter-chunk delay. Chunk boundaries from the
+   original response are preserved.
+2. The response MUST include `x-lcp-cache: HIT` and
+   `x-lcp-key: <first-12-chars-of-key>`.
 3. The `hit_count` for the entry MUST be incremented by 1.
+4. The `stats` table MUST be updated: increment `hits` by 1 and
+   `bytes_served_from_cache` by the entry's `resp_bytes`.
 
 ### Bypass
 
 A request with header `x-lcp-bypass: 1` MUST skip both the cache read and
-the cache write. The request is forwarded as-is, and the response is returned
-without storing.
+the cache write. The request is forwarded as-is and the response is returned
+without storing or tracing. The response MUST include `x-lcp-cache: BYPASS`;
+the `x-lcp-key` header MUST NOT be present on bypass responses.
+
+### Consumer compression
+
+Downstream clients MAY send `Accept-Encoding` headers (gzip, br, zstd,
+etc.). The proxy MUST:
+
+1. Strip `Accept-Encoding` before forwarding to the upstream so that
+   upstream responses arrive uncompressed.
+2. Accept and decompress any compressed request body sent by the downstream
+   client before hashing and forwarding.
+3. Return responses to the downstream client uncompressed; the proxy does
+   not re-apply content encoding on the response path.
 
 ## SSE / Streaming
 
-lcp buffers the full upstream response before forwarding it to the client.
-On cache hit, the stored body is returned in one shot.
+Streaming responses (SSE / `text/event-stream` and chunked JSON) are handled
+transparently in both directions:
 
-> **Consequence**: clients that rely on streaming token-by-token see the
-> full response arrive instantly on cache hits (and with a slight delay on
-> misses due to buffering). This is acceptable for development use cases.
-> Faithful timing replay is a non-goal for v1.
+- **Cache miss**: chunks are forwarded to the client as they arrive; the
+  proxy does not buffer the full response body.
+- **Cache hit**: stored chunks are replayed sequentially at full speed
+  without timing delay, preserving original chunk boundaries. Downstream
+  consumers receive a properly chunked SSE stream.
 
-`accept-encoding` MUST be stripped from forwarded requests so that upstream
-providers do not apply compression to SSE streams.
+`Accept-Encoding` MUST be stripped from all forwarded requests so that
+upstream providers do not apply compression to SSE streams.
+
+## Tracing
+
+A client MAY attach a trace identifier to any request:
+
+```
+x-lcp-trace: <trace-id>
+```
+
+`<trace-id>` is an arbitrary client-supplied string (UUID or freeform
+label).
+
+### Behavior
+
+- The proxy MUST persist the `(trace_id, cache_key)` pair in `trace_entries`
+  for every cached (non-bypass) request that carries the header.
+- Multiple requests in a session share the same trace ID.
+- A single cache entry MAY appear in multiple trace sessions (many-to-many).
+- Bypass requests (`x-lcp-bypass: 1`) are NOT recorded in `trace_entries`.
+
+### Query endpoint
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/trace/<trace-id>` | All cache entries for the trace, ordered by `created_at`. Resolved via JOIN of `trace_entries` and `cache_entries` on `cache_key`. |
+
+Response shape:
+```json
+{
+  "trace_id": "<trace-id>",
+  "entries": [
+    { "key": "...", "created_at": "...", "status": 200, "hit_count": 3 }
+  ]
+}
+```
 
 ## Stats and Admin Endpoints
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/` | Health check. Returns `{"status":"ok"}`. |
-| `GET` | `/stats` | Hit/miss counts, bytes served, entries, by-model breakdown. |
-| `DELETE` | `/stats` | Reset stat counters. Entries are unaffected. |
-| `DELETE` | `/cache` | Delete all cache entries. Stats are unaffected. |
+| `GET` | `/stats` | Hit/miss counts, bytes served, total entries, by-model entry counts. |
+| `DELETE` | `/stats` | Reset the `stats` table counters to zero. Per-entry `hit_count` values and cache entries are unaffected. |
+| `DELETE` | `/cache` | Delete all cache entries and trace entries. The `stats` table counters are unaffected. |
+
+### `/stats` response shape
+
+```json
+{
+  "hits": 312,
+  "misses": 87,
+  "bytes_served_from_cache": 4182404,
+  "entries": 87,
+  "by_model": {"anthropic/claude-sonnet-4": 46, "gpt-4o": 41}
+}
+```
+
+`hits`, `misses`, and `bytes_served_from_cache` come from the `stats` table.
+`entries` is `COUNT(*)` from `entries`.
+`by_model` is `COUNT(*) GROUP BY model` from `entries`, keyed by the raw `model` field
+value as recorded from the request body. Model names that include a provider prefix
+(e.g. OpenRouter's `"anthropic/claude-sonnet-4"`) appear as-is; names without a prefix
+(e.g. native OpenAI `"gpt-4o"`) appear without one.
 
 ## Configuration
 
@@ -135,27 +258,28 @@ priority over env vars.
 | `--host` | `LCP_HOST` | `127.0.0.1` | Bind host |
 | `--db` | `LCP_DB` | `~/.cache/lcp/cache.db` | SQLite path |
 | `--ttl` | `LCP_TTL` | `0` | Entry TTL in seconds (0 = forever) |
-| `--anthropic-upstream` | `LCP_ANTHROPIC_UPSTREAM` | see table above | Anthropic upstream override |
-| `--openai-upstream` | `LCP_OPENAI_UPSTREAM` | see table above | OpenAI upstream override |
-| `--openrouter-upstream` | `LCP_OPENROUTER_UPSTREAM` | see table above | OpenRouter upstream override |
+| `--timeout` | `LCP_TIMEOUT` | `300` | Upstream request timeout in seconds |
+| `--anthropic-upstream` | `LCP_ANTHROPIC_UPSTREAM` | see table above | Anthropic upstream |
+| `--openai-upstream` | `LCP_OPENAI_UPSTREAM` | see table above | OpenAI upstream |
+| `--openrouter-upstream` | `LCP_OPENROUTER_UPSTREAM` | see table above | OpenRouter upstream |
+| `--gemini-upstream` | `LCP_GEMINI_UPSTREAM` | see table above | Gemini upstream |
 
-## Future: Interceptor Plugin API
+## Extension Architecture
 
-A future version will expose a plugin extension point that runs before the
-cache key is computed and before the response is stored. Intended use cases:
+lcp is structured so that a future interceptor layer can be added without
+rewriting the proxy pipeline. Intended insertion points:
 
-- Secret redaction: strip or hash API keys, user IDs, and other PII from
-  stored request/response bodies before writing to disk.
-- Request mutation: normalize or enrich requests before forwarding.
-- Response filtering: drop or redact fields from stored responses.
+- Before cache key computation: request normalization, field redaction.
+- Before response storage: response filtering, enrichment.
+- After cache lookup: audit logging, cache decoration.
 
-The plugin API is intentionally out of scope for v1.
+No extension code runs in v1.
 
 ## Per-Component Specs
 
 Each crate MUST have a `SPEC.md` before implementation begins:
 
 ```
-crates/lcp-core/SPEC.md    types, hashing, cache contract
-crates/lcp-server/SPEC.md  proxy behavior, routing, SSE contract
+crates/lcp-core/SPEC.md    types, hashing, cache storage, tracing schema
+crates/lcp-server/SPEC.md  proxy behavior, routing, SSE, tracing endpoints
 ```

@@ -18,15 +18,32 @@ plans/              Active development plans — committed, deleted when complet
 references/         External reference projects — git-ignored, never committed
 artifacts/          Transient working files — git-ignored, never committed
 SPEC.md             Behavioral contract for the full system
-TESTING.md          Permanent testing strategy
-progress.md         Current work status
+MASTER_PROGRESS.md  Single source of truth for project-wide work status
 ```
 
 ## Plans
 
 - `plans/` is committed; plans are **deleted** once execution is complete.
-- Plans are created by the planner skill; names follow `plans/<feature>/PROGRESS.md`.
+- Plans are created by the planner skill; names follow `plans/<feature>/PROGRESS.md` + `plans/<feature>/step-NN-*.md`.
 - Code comments and docs MUST NOT reference plan files.
+
+## Master Progress
+
+`MASTER_PROGRESS.md` is the single source of truth for project-wide work status.
+Every human and agent working on lcp reads it first to understand current state.
+
+**What it contains:**
+- **In Progress** — active plans with a link to their plan directory
+- **Queued** — not-started plans with a link to their plan directory
+- **Completed** — one-liner per finished feature/plan, with commit hash
+- **Known Gaps** — identified issues with no active plan owner
+
+**Rules:**
+- When a plan completes and is deleted → add a one-liner to Completed with the merge commit
+- When a new plan is created → add it to Queued
+- When work starts on a plan → move it from Queued to In Progress
+- Keep entries as one-liners; all detail lives in plan files and git history
+- Never let `MASTER_PROGRESS.md` drift: update it in the same commit as the plan change
 
 ## SPEC-driven development
 
@@ -36,20 +53,23 @@ progress.md         Current work status
 - The pipeline is: **investigate → spec → plan → orchestrate**.
 - No code is written before a spec exists for the component being built.
 
+## Artifacts
+
+- All transient working files (investigation scans, fact-check reports,
+  progress trackers, brainstorm notes) live in `artifacts/` and are git-ignored.
+- Never commit files from `artifacts/`.
+- Never commit scratch files, session recordings, or API fixture files to the repo root.
+
 ## Testing
 
-See `TESTING.md` for the full strategy. Rules for agents:
-
-- **Inline unit tests** (`#[cfg(test)]` in `src/`) are implementation details.
+- **Inline unit tests** (`#[cfg(test)]` modules in `src/`) are implementation details.
   Change them freely during refactors — they carry no external obligation.
 - **External tests** (`tests/`) are behavioral contracts.
-  A failing external test is a bug or a deliberate spec change, never a refactor side effect.
-- External tiers in order of scope:
-  1. **Spec invariants** (`tests/spec/`) — direct MUST/SHOULD assertions; must pass on every commit
-  2. **Integration** (`tests/integration/`) — public-API behavior
-  3. **E2E** (`tests/e2e/`) — real upstream calls, gated by `--features test-e2e`
-- Write spec invariant tests alongside the spec, before the implementation.
+  A failing external test is a bug or a deliberate spec change, never a refactor casualty.
+- Three external tiers: **spec invariants** (`tests/spec/`) on every commit; **integration** (`tests/integration/`); **E2E** (`tests/e2e/`) gated by `--features test-e2e`.
 - Never weaken an external test to make a refactor pass.
+- Write spec invariant tests alongside the spec, before the implementation.
+- Run: `cargo nextest run` (all); `cargo nextest run --test spec` (invariants only).
 
 ## Crates
 
@@ -72,4 +92,4 @@ See `TESTING.md` for the full strategy. Rules for agents:
 
 - **Shell:** bash; `jq`, `rg`, `fdfind` available
 - **Build:** `cargo build`, `cargo test`, `cargo clippy`, `cargo fmt`
-- **Tests:** `cargo nextest run` (preferred); see `TESTING.md` for per-tier commands
+- **Tests:** `cargo nextest run`

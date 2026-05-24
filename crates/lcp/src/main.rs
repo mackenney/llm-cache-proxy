@@ -27,6 +27,10 @@ struct Cli {
     #[arg(long, env = "LCP_TTL", default_value = "0")]
     ttl: u64,
 
+    /// Upstream request timeout in seconds. 0 means no timeout.
+    #[arg(long, env = "LCP_TIMEOUT", default_value = "300")]
+    timeout: u64,
+
     /// Override the Anthropic upstream URL.
     #[arg(long, env = "LCP_ANTHROPIC_UPSTREAM")]
     anthropic_upstream: Option<String>,
@@ -61,6 +65,7 @@ async fn main() -> Result<()> {
     let config = ServerConfig {
         addr,
         cache,
+        timeout_seconds: cli.timeout,
         anthropic_upstream: cli.anthropic_upstream,
         openai_upstream: cli.openai_upstream,
         openrouter_upstream: cli.openrouter_upstream,

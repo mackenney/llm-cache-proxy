@@ -31,9 +31,10 @@ pub struct Exchange {
 #[derive(Debug)]
 pub struct CacheEntry {
     pub key: String,
-    pub created_at: i64,
+    pub created_at: String, // ISO-8601 UTC
     pub provider: String,
     pub model: Option<String>,
+    pub status: u16,
     pub hit_count: i64,
     pub req_bytes: i64,
     pub resp_bytes: i64,

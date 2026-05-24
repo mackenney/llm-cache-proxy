@@ -37,13 +37,24 @@ pub async fn handle(
     };
 
     let bypass = headers.get("x-lcp-bypass").and_then(|v| v.to_str().ok()) == Some("1");
+    let trace_id = headers
+        .get("x-lcp-trace")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
 
     let full_path = format!("/{provider_str}/{path}");
     let key = cache_key("POST", &full_path, &body);
 
     if !bypass {
         match state.config.cache.get(&key) {
-            Ok(Some(exchange)) => return serve_cached(exchange),
+            Ok(Some(exchange)) => {
+                if let Some(ref tid) = trace_id {
+                    if let Err(e) = state.config.cache.record_trace(tid, &key) {
+                        tracing::warn!(err = %e, "failed to record trace on hit");
+                    }
+                }
+                return serve_cached(exchange, &key);
+            }
             Ok(None) => {}
             Err(e) => {
                 tracing::warn!(err = %e, "cache lookup failed, falling through to upstream");
@@ -128,21 +139,31 @@ pub async fn handle(
             content_type: content_type.clone(),
             chunks,
         };
-        if let Err(e) =
-            state
-                .config
-                .cache
-                .put(&key, provider.path_prefix(), model.as_deref(), &exchange)
+        match state
+            .config
+            .cache
+            .put(&key, provider.path_prefix(), model.as_deref(), &exchange)
         {
-            tracing::warn!(err = %e, "failed to cache exchange");
+            Ok(()) => {
+                if let Some(ref tid) = trace_id {
+                    if let Err(e) = state.config.cache.record_trace(tid, &key) {
+                        tracing::warn!(err = %e, "failed to record trace on miss");
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(err = %e, "failed to cache exchange"),
         }
     }
 
+    let lcp_status = if bypass { "BYPASS" } else { "MISS" };
     let mut response = Response::builder()
         .status(status)
         .header("content-type", &content_type)
-        .header("x-lcp-cache", "MISS")
-        .header("x-lcp-key", &key[..12]);
+        .header("x-lcp-cache", lcp_status);
+
+    if !bypass {
+        response = response.header("x-lcp-key", &key[..12]);
+    }
 
     if is_sse {
         response = response
@@ -155,7 +176,7 @@ pub async fn handle(
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-fn serve_cached(exchange: Exchange) -> Response {
+fn serve_cached(exchange: Exchange, key: &str) -> Response {
     let body: Vec<u8> = exchange
         .chunks
         .into_iter()
@@ -166,6 +187,7 @@ fn serve_cached(exchange: Exchange) -> Response {
         .status(exchange.status)
         .header("content-type", &exchange.content_type)
         .header("x-lcp-cache", "HIT")
+        .header("x-lcp-key", &key[..12])
         .body(Body::from(body))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }

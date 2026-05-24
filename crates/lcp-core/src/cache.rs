@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 
 use crate::types::{CacheEntry, Exchange, ResponseChunk};
@@ -13,6 +13,15 @@ pub struct Cache {
     // Debug impl is manual below to avoid exposing Connection internals.
     inner: Arc<Mutex<Connection>>,
     ttl_seconds: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CacheStats {
+    pub hits: i64,
+    pub misses: i64,
+    pub bytes_served_from_cache: i64,
+    pub entries: i64,
+    pub by_model: std::collections::HashMap<String, i64>,
 }
 
 impl Cache {
@@ -32,26 +41,29 @@ impl Cache {
     /// Look up a cached exchange by key. Returns `None` on miss or expired entry.
     pub fn get(&self, key: &str) -> Result<Option<Exchange>> {
         let conn = self.inner.lock().unwrap();
-        let now = unix_now();
 
         let result = conn.query_row(
-            "SELECT created_at, status, content_type, exchange_json FROM entries WHERE key = ?1",
+            "SELECT created_at, status, content_type, exchange_json, resp_bytes \
+             FROM entries WHERE key = ?1",
             rusqlite::params![key],
             |row| {
                 Ok((
-                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(0)?,
                     row.get::<_, u16>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
                 ))
             },
         );
 
         match result {
-            Ok((created_at, status, content_type, json)) => {
-                if self.ttl_seconds > 0 && now.saturating_sub(created_at as u64) > self.ttl_seconds
-                {
-                    return Ok(None);
+            Ok((created_at, status, content_type, json, resp_bytes)) => {
+                if self.ttl_seconds > 0 {
+                    let age = age_seconds(&created_at);
+                    if age > self.ttl_seconds {
+                        return Ok(None);
+                    }
                 }
                 conn.execute(
                     "UPDATE entries SET hit_count = hit_count + 1 WHERE key = ?1",
@@ -61,6 +73,11 @@ impl Cache {
                     "INSERT INTO stats(k, v) VALUES('hits', 1)
                      ON CONFLICT(k) DO UPDATE SET v = v + 1",
                     [],
+                )?;
+                conn.execute(
+                    "INSERT INTO stats(k, v) VALUES('bytes_served_from_cache', ?1)
+                     ON CONFLICT(k) DO UPDATE SET v = v + ?1",
+                    rusqlite::params![resp_bytes],
                 )?;
                 let chunks: Vec<ResponseChunk> =
                     serde_json::from_str(&json).context("deserializing cached chunks")?;
@@ -92,7 +109,7 @@ impl Cache {
         exchange: &Exchange,
     ) -> Result<()> {
         let conn = self.inner.lock().unwrap();
-        let now = unix_now() as i64;
+        let now = iso_now();
         let chunks_json = serde_json::to_string(&exchange.chunks)?;
         let resp_bytes: usize = exchange.chunks.iter().map(|c| c.data.len()).sum();
         conn.execute(
@@ -115,6 +132,44 @@ impl Cache {
         Ok(())
     }
 
+    /// Persist a (trace_id, cache_key) association.
+    pub fn record_trace(&self, trace_id: &str, cache_key: &str) -> Result<()> {
+        let conn = self.inner.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO trace_entries(trace_id, cache_key) VALUES (?1, ?2)",
+            rusqlite::params![trace_id, cache_key],
+        )?;
+        Ok(())
+    }
+
+    /// Return all cache entries associated with a trace, ordered by created_at.
+    pub fn get_trace(&self, trace_id: &str) -> Result<Vec<CacheEntry>> {
+        let conn = self.inner.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT e.key, e.created_at, e.provider, e.model, e.status,
+                    e.hit_count, e.req_bytes, e.resp_bytes
+             FROM entries e
+             JOIN trace_entries t ON t.cache_key = e.key
+             WHERE t.trace_id = ?1
+             ORDER BY e.created_at ASC",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![trace_id], |r| {
+                Ok(CacheEntry {
+                    key: r.get(0)?,
+                    created_at: r.get(1)?,
+                    provider: r.get(2)?,
+                    model: r.get(3)?,
+                    status: r.get(4)?,
+                    hit_count: r.get(5)?,
+                    req_bytes: r.get(6)?,
+                    resp_bytes: r.get(7)?,
+                })
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(rows)
+    }
+
     /// Return aggregate statistics.
     pub fn stats(&self) -> Result<CacheStats> {
         let conn = self.inner.lock().unwrap();
@@ -125,11 +180,7 @@ impl Cache {
         };
         let stat_map: std::collections::HashMap<String, i64> = stat_rows.into_iter().collect();
 
-        let (entries, resp_bytes): (i64, i64) = conn.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(resp_bytes), 0) FROM entries",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )?;
+        let entries: i64 = conn.query_row("SELECT COUNT(*) FROM entries", [], |r| r.get(0))?;
 
         let by_model: Vec<(Option<String>, i64)> = {
             let mut stmt = conn.prepare("SELECT model, COUNT(*) FROM entries GROUP BY model")?;
@@ -142,7 +193,6 @@ impl Cache {
             misses: *stat_map.get("misses").unwrap_or(&0),
             bytes_served_from_cache: *stat_map.get("bytes_served_from_cache").unwrap_or(&0),
             entries,
-            cached_response_bytes: resp_bytes,
             by_model: by_model
                 .into_iter()
                 .map(|(m, c)| (m.unwrap_or_else(|| "unknown".into()), c))
@@ -150,10 +200,11 @@ impl Cache {
         })
     }
 
-    /// Delete all entries.
+    /// Delete all cache and trace entries.
     pub fn clear_entries(&self) -> Result<i64> {
         let conn = self.inner.lock().unwrap();
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM entries", [], |r| r.get(0))?;
+        conn.execute("DELETE FROM trace_entries", [])?;
         conn.execute("DELETE FROM entries", [])?;
         Ok(n)
     }
@@ -168,7 +219,7 @@ impl Cache {
     pub fn list_entries(&self) -> Result<Vec<CacheEntry>> {
         let conn = self.inner.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT key, created_at, provider, model, hit_count, req_bytes, resp_bytes
+            "SELECT key, created_at, provider, model, status, hit_count, req_bytes, resp_bytes
              FROM entries ORDER BY created_at DESC",
         )?;
         let rows = stmt
@@ -178,24 +229,15 @@ impl Cache {
                     created_at: r.get(1)?,
                     provider: r.get(2)?,
                     model: r.get(3)?,
-                    hit_count: r.get(4)?,
-                    req_bytes: r.get(5)?,
-                    resp_bytes: r.get(6)?,
+                    status: r.get(4)?,
+                    hit_count: r.get(5)?,
+                    req_bytes: r.get(6)?,
+                    resp_bytes: r.get(7)?,
                 })
             })?
             .collect::<std::result::Result<_, _>>()?;
         Ok(rows)
     }
-}
-
-#[derive(Debug, serde::Serialize)]
-pub struct CacheStats {
-    pub hits: i64,
-    pub misses: i64,
-    pub bytes_served_from_cache: i64,
-    pub entries: i64,
-    pub cached_response_bytes: i64,
-    pub by_model: std::collections::HashMap<String, i64>,
 }
 
 impl std::fmt::Debug for Cache {
@@ -210,7 +252,7 @@ fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS entries (
              key             TEXT PRIMARY KEY,
-             created_at      INTEGER NOT NULL,
+             created_at      TEXT NOT NULL,
              status          INTEGER NOT NULL,
              content_type    TEXT NOT NULL,
              exchange_json   TEXT NOT NULL,
@@ -220,6 +262,11 @@ fn init_schema(conn: &Connection) -> Result<()> {
              resp_bytes      INTEGER NOT NULL DEFAULT 0,
              hit_count       INTEGER NOT NULL DEFAULT 0
          );
+         CREATE TABLE IF NOT EXISTS trace_entries (
+             trace_id  TEXT NOT NULL,
+             cache_key TEXT NOT NULL,
+             PRIMARY KEY (trace_id, cache_key)
+         );
          CREATE TABLE IF NOT EXISTS stats (
              k TEXT PRIMARY KEY,
              v INTEGER NOT NULL
@@ -228,11 +275,20 @@ fn init_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+fn iso_now() -> String {
+    Utc::now().to_rfc3339()
+}
+
+/// Compute seconds elapsed since an ISO-8601 timestamp. Returns 0 on parse failure.
+fn age_seconds(created_at: &str) -> u64 {
+    DateTime::parse_from_rfc3339(created_at)
+        .map(|dt| {
+            Utc::now()
+                .signed_duration_since(dt.with_timezone(&Utc))
+                .num_seconds()
+                .max(0) as u64
+        })
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -321,5 +377,41 @@ mod tests {
         let n = cache.clear_entries().unwrap();
         assert_eq!(n, 2);
         assert!(cache.get("k1").unwrap().is_none());
+    }
+
+    #[test]
+    fn record_and_get_trace() {
+        let cache = temp_cache();
+        let ex = make_exchange(200, vec![("data: ok\n\n", 0)]);
+        cache
+            .put("k1", "anthropic", Some("claude-opus-4"), &ex)
+            .unwrap();
+        cache.put("k2", "openai", Some("gpt-4o"), &ex).unwrap();
+
+        cache.record_trace("trace-abc", "k1").unwrap();
+        cache.record_trace("trace-abc", "k2").unwrap();
+
+        let entries = cache.get_trace("trace-abc").unwrap();
+        assert_eq!(entries.len(), 2);
+        let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+        assert!(keys.contains(&"k1"));
+        assert!(keys.contains(&"k2"));
+    }
+
+    #[test]
+    fn get_trace_unknown_returns_empty() {
+        let cache = temp_cache();
+        let entries = cache.get_trace("no-such-trace").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn bytes_served_from_cache_incremented() {
+        let cache = temp_cache();
+        let ex = make_exchange(200, vec![("hello", 0)]);
+        cache.put("k1", "anthropic", None, &ex).unwrap();
+        cache.get("k1").unwrap();
+        let stats = cache.stats().unwrap();
+        assert_eq!(stats.bytes_served_from_cache, 5);
     }
 }

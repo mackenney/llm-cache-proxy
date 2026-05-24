@@ -12,6 +12,8 @@ use crate::router::build_router;
 pub struct ServerConfig {
     pub addr: SocketAddr,
     pub cache: Cache,
+    /// Upstream request timeout in seconds. 0 means no timeout.
+    pub timeout_seconds: u64,
     /// Override upstream URL per provider. Falls back to provider default when absent.
     pub anthropic_upstream: Option<String>,
     pub openai_upstream: Option<String>,
@@ -40,15 +42,18 @@ impl ServerConfig {
 /// Start the proxy and block until the server terminates.
 pub async fn serve(config: ServerConfig) -> Result<()> {
     let addr = config.addr;
+    let timeout_seconds = config.timeout_seconds;
     let config = Arc::new(config);
-    let client = Arc::new(
-        reqwest::Client::builder()
-            // Never negotiate compression — upstreams must return plain SSE.
-            .no_gzip()
-            .no_deflate()
-            .no_brotli()
-            .build()?,
-    );
+
+    let mut cb = reqwest::Client::builder()
+        // Never negotiate compression — upstreams must return plain SSE.
+        .no_gzip()
+        .no_deflate()
+        .no_brotli();
+    if timeout_seconds > 0 {
+        cb = cb.timeout(std::time::Duration::from_secs(timeout_seconds));
+    }
+    let client = Arc::new(cb.build()?);
 
     let app = build_router(config, client);
     let listener = tokio::net::TcpListener::bind(addr).await?;
