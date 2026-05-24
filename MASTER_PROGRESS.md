@@ -16,7 +16,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | Plan | What |
 |---|---|
-| _(none)_ | |
+| [stream1](plans/stream1/PROGRESS.md) | Replace full-body buffering with true streaming using Body::from_stream() |
 
 ---
 
@@ -41,6 +41,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 |---|---|
 | Fix spec gaps: tracing, bypass headers, decompression, timeout, stats (17 tests passing) | 6dfbc71 |
 | Gemini provider, `GET /cache/<key>`, `GET /trace/<id>?full=true`, `FullEntry`/`inspect`/`inspect_trace` (17 tests passing) | c0230a4 |
+| MockUpstream + TestHarness + 10 Priority 1 spec invariant tests (cache hit/miss, 41 tests passing) | eda6d31 |
 
 ---
 
@@ -48,5 +49,4 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | ID | Issue | Plan |
 |---|---|---|
-| STREAM-1 | Proxy buffers full upstream response before forwarding — chunks are not streamed to client in real-time | _(no plan)_ |
-| TEST-1 | No `MockUpstream` — blocks spec invariant and integration tests for proxy behavior | _(no plan)_ |
+| STREAM-1 | Proxy buffers full upstream response before forwarding — chunks are not streamed to client in real-time | [stream1](plans/stream1/PROGRESS.md) |
