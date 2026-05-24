@@ -5,4 +5,5 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-// Test modules will be added in subsequent steps
+mod cache_hit;
+mod cache_miss;
