@@ -33,6 +33,7 @@ impl<T> ReceiverStream<T> {
 impl<T> Stream for ReceiverStream<T> {
     type Item = T;
 
+    // Receiver<T>: Unpin (Arc-backed), so Pin<&mut Self> auto-derefs to &mut Self.
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx.poll_recv(cx)
     }
@@ -132,7 +133,9 @@ pub async fn handle(
     let do_cache = !bypass && status.is_success();
 
     // Create channel for streaming response to client
-    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
+    // Bounded channel; capacity bounds in-flight chunks and provides backpressure.
+    const STREAM_CHANNEL_CAPACITY: usize = 32;
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(STREAM_CHANNEL_CAPACITY);
 
     // Clone values needed by the spawned task
     let cache = state.config.cache.clone();
@@ -154,11 +157,14 @@ pub async fn handle(
         let stream_complete = loop {
             match stream.next().await {
                 Some(Ok(bytes)) => {
-                    let offset_ms = start.elapsed().as_millis() as u64;
-                    chunks.push(ResponseChunk {
-                        offset_ms,
-                        data: String::from_utf8_lossy(&bytes).into_owned(),
-                    });
+                    // Only accumulate for cache write; skip string conversion when not caching.
+                    if do_cache {
+                        let offset_ms = start.elapsed().as_millis() as u64;
+                        chunks.push(ResponseChunk {
+                            offset_ms,
+                            data: String::from_utf8_lossy(&bytes).into_owned(),
+                        });
+                    }
                     // Forward to client; break if client disconnected
                     if tx.send(Ok(bytes)).await.is_err() {
                         tracing::debug!("client disconnected mid-stream");
@@ -167,6 +173,8 @@ pub async fn handle(
                 }
                 Some(Err(e)) => {
                     tracing::warn!(err = %e, chunks = chunks.len(), "upstream stream error");
+                    // Propagate error into response body so client sees an aborted stream.
+                    let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
                     break false; // Don't cache on error
                 }
                 None => break true, // Stream completed successfully
