@@ -79,7 +79,7 @@ async fn test_miss_stores_2xx_response() {
         .unwrap();
 
     let _ = resp.bytes().await.unwrap();
-    tokio::task::yield_now().await;
+    harness.wait_for_writes().await;
 
     let entries = harness.cache().list_entries().unwrap();
     assert_eq!(entries.len(), 1, "expected 1 cache entry after MISS");
@@ -106,7 +106,7 @@ async fn test_miss_does_not_store_non_2xx() {
 
     assert_eq!(resp.status(), 400);
     let _ = resp.bytes().await.unwrap();
-    tokio::task::yield_now().await;
+    harness.wait_for_writes().await;
 
     let entries = harness.cache().list_entries().unwrap();
     assert_eq!(entries.len(), 0, "non-2xx should not be cached");
@@ -129,7 +129,7 @@ async fn test_miss_increments_misses_stat() {
         .await
         .unwrap();
     let _ = resp.bytes().await.unwrap();
-    tokio::task::yield_now().await;
+    harness.wait_for_writes().await;
 
     let stats_after = harness.cache().stats().unwrap();
     assert_eq!(stats_after.misses, 1, "misses stat should increment");

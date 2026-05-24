@@ -33,7 +33,7 @@ async fn setup_hit_harness() -> (TestHarness, String) {
 
     let first_body = resp.text().await.unwrap();
     // Yield to let the proxy's spawned cache-write task complete before tests check HIT.
-    tokio::task::yield_now().await;
+    harness.wait_for_writes().await;
     (harness, first_body)
 }
 
@@ -97,7 +97,7 @@ async fn test_hit_increments_hit_count() {
         .await
         .unwrap();
     let _ = resp.bytes().await.unwrap();
-    tokio::task::yield_now().await;
+    harness.wait_for_writes().await;
 
     let entries_after = harness.cache().list_entries().unwrap();
     assert_eq!(
@@ -123,7 +123,7 @@ async fn test_hit_increments_stats() {
         .await
         .unwrap();
     let _ = resp.bytes().await.unwrap();
-    tokio::task::yield_now().await;
+    harness.wait_for_writes().await;
 
     let stats_after = harness.cache().stats().unwrap();
     assert!(
