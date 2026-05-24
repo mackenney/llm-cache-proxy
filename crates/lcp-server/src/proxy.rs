@@ -138,7 +138,9 @@ pub async fn handle(
         .to_owned();
     let is_sse = content_type.contains("text/event-stream");
 
-    let model = extract_model(&body);
+    let model = provider
+        .extract_model_from_path(&path)
+        .or_else(|| extract_model(&body));
     let do_cache = !bypass && status.is_success();
 
     // Create channel for streaming response to client
