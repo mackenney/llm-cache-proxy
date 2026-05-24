@@ -85,6 +85,28 @@ An unrecognised `<provider>` prefix MUST return HTTP 404.
    `x-lcp-key: <first-12-chars-of-key>`.
 6. Non-`2xx` responses MUST be forwarded as-is and MUST NOT be stored.
 
+### Model Extraction
+
+The proxy MUST extract a model identifier from each cacheable request and pass
+it to `Cache::put`. Extraction rules are provider-specific:
+
+| Provider | Extraction Source |
+|---|---|
+| Anthropic | `model` field from JSON request body |
+| OpenAI | `model` field from JSON request body |
+| OpenRouter | `model` field from JSON request body |
+| Gemini | Path segment: `/models/{model}:{verb}` pattern |
+
+For Gemini, the model MUST be extracted from the URL path using the pattern
+`/models/{model}:{verb}` where `{verb}` is one of `generateContent`,
+`streamGenerateContent`, `countTokens`, `embedContent`, or similar.
+The model is the segment between `/models/` and the colon-verb suffix
+(e.g., `/models/gemini-2.5-flash:generateContent` yields `gemini-2.5-flash`).
+
+If extraction fails for any provider (malformed body, unrecognized path
+pattern), the proxy SHOULD store `None` as the model. The cache entry remains
+valid; only the model metadata is absent.
+
 ### Bypass
 
 1. Forward the request without touching the cache (no read, no write).

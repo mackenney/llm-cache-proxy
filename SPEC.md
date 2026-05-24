@@ -268,10 +268,14 @@ With `?full=true`, each entry also includes `provider`, `model`, `content_type`,
 
 `hits`, `misses`, and `bytes_served_from_cache` come from the `stats` table.
 `entries` is `COUNT(*)` from `entries`.
-`by_model` is `COUNT(*) GROUP BY model` from `entries`, keyed by the raw `model` field
-value as recorded from the request body. Model names that include a provider prefix
-(e.g. OpenRouter's `"anthropic/claude-sonnet-4"`) appear as-is; names without a prefix
-(e.g. native OpenAI `"gpt-4o"`) appear without one.
+`by_model` is `COUNT(*) GROUP BY model` from `entries`, keyed by the model
+identifier extracted from each request. For body-based providers (Anthropic,
+OpenAI, OpenRouter), this is the raw `model` field value from the request body.
+For Gemini, this is the model name extracted from the URL path (e.g.,
+`gemini-2.5-flash` from `/models/gemini-2.5-flash:generateContent`). Model
+names that include a provider prefix (e.g., OpenRouter's
+`"anthropic/claude-sonnet-4"`) appear as-is; names without a prefix appear
+without one.
 
 ## Configuration
 

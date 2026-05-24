@@ -77,8 +77,10 @@ MUST be safe to share across async tasks without external locking.
   `content_type: String`, `request: RequestRecord`, `chunks: Vec<ResponseChunk>`.
 - **`CacheStats`**: `hits`, `misses`, `bytes_served_from_cache` (from the
   stats counters), `entries` (live count), `by_model` (entry count keyed by the
-  raw `model` field value; provider-qualified names such as `"anthropic/claude-sonnet-4"`
-  appear as-is when stored that way in the request body).
+  model identifier extracted by the proxy layer; extraction may come from the
+  request body's `model` field or from the URL path depending on the provider.
+  Provider-qualified names such as `"anthropic/claude-sonnet-4"` appear as-is
+  when stored that way).
 
 ### Behavioral contract
 
