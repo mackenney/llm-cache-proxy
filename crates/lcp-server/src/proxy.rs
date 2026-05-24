@@ -6,7 +6,10 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use tokio::sync::mpsc;
 
 use lcp_core::{
     Provider, cache_key,
@@ -14,6 +17,26 @@ use lcp_core::{
 };
 
 use crate::server::ServerConfig;
+
+/// Adapts `mpsc::Receiver<T>` to `Stream<Item = T>` for use with `Body::from_stream()`.
+/// Avoids adding tokio-stream dependency for this single use case.
+struct ReceiverStream<T> {
+    rx: mpsc::Receiver<T>,
+}
+
+impl<T> ReceiverStream<T> {
+    fn new(rx: mpsc::Receiver<T>) -> Self {
+        Self { rx }
+    }
+}
+
+impl<T> Stream for ReceiverStream<T> {
+    type Item = T;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.rx.poll_recv(cx)
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -106,54 +129,84 @@ pub async fn handle(
     let is_sse = content_type.contains("text/event-stream");
 
     let model = extract_model(&body);
-    let start = Instant::now();
-    let mut chunks: Vec<ResponseChunk> = Vec::new();
-    let mut full_body: Vec<u8> = Vec::new();
+    let do_cache = !bypass && status.is_success();
 
-    let mut stream = upstream_resp.bytes_stream();
-    while let Some(result) = stream.next().await {
-        match result {
-            Ok(bytes) => {
-                let offset_ms = start.elapsed().as_millis() as u64;
-                chunks.push(ResponseChunk {
-                    offset_ms,
-                    data: String::from_utf8_lossy(&bytes).into_owned(),
-                });
-                full_body.extend_from_slice(&bytes);
-            }
-            Err(e) => {
-                tracing::warn!(err = %e, "upstream stream error");
-                break;
-            }
-        }
-    }
+    // Create channel for streaming response to client
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
 
-    if !bypass && status.is_success() {
-        let exchange = Exchange {
-            request: RequestRecord {
-                method: "POST".into(),
-                path: full_path,
-                body: String::from_utf8_lossy(&body).into_owned(),
-            },
-            status: status.as_u16(),
-            content_type: content_type.clone(),
-            chunks,
-        };
-        match state
-            .config
-            .cache
-            .put(&key, provider.path_prefix(), model.as_deref(), &exchange)
-        {
-            Ok(()) => {
-                if let Some(ref tid) = trace_id {
-                    if let Err(e) = state.config.cache.record_trace(tid, &key) {
-                        tracing::warn!(err = %e, "failed to record trace on miss");
+    // Clone values needed by the spawned task
+    let cache = state.config.cache.clone();
+    let key_clone = key.clone();
+    let full_path_clone = full_path.clone();
+    let body_clone = body.clone();
+    let trace_id_clone = trace_id.clone();
+    let provider_prefix = provider.path_prefix().to_owned();
+    let model_clone = model.clone();
+    let content_type_clone = content_type.clone();
+    let status_code = status.as_u16();
+
+    // Spawn task to read upstream, forward to client channel, and cache on completion
+    tokio::spawn(async move {
+        let mut chunks: Vec<ResponseChunk> = Vec::new();
+        let mut stream = upstream_resp.bytes_stream();
+        let start = Instant::now();
+
+        let stream_complete = loop {
+            match stream.next().await {
+                Some(Ok(bytes)) => {
+                    let offset_ms = start.elapsed().as_millis() as u64;
+                    chunks.push(ResponseChunk {
+                        offset_ms,
+                        data: String::from_utf8_lossy(&bytes).into_owned(),
+                    });
+                    // Forward to client; break if client disconnected
+                    if tx.send(Ok(bytes)).await.is_err() {
+                        tracing::debug!("client disconnected mid-stream");
+                        break false; // Don't cache partial responses
                     }
                 }
+                Some(Err(e)) => {
+                    tracing::warn!(err = %e, chunks = chunks.len(), "upstream stream error");
+                    break false; // Don't cache on error
+                }
+                None => break true, // Stream completed successfully
             }
-            Err(e) => tracing::warn!(err = %e, "failed to cache exchange"),
+        };
+        drop(tx); // Signal end-of-stream to receiver
+
+        // Cache write only if stream completed successfully and caching is enabled
+        if stream_complete && do_cache {
+            let exchange = Exchange {
+                request: RequestRecord {
+                    method: "POST".into(),
+                    path: full_path_clone,
+                    body: String::from_utf8_lossy(&body_clone).into_owned(),
+                },
+                status: status_code,
+                content_type: content_type_clone,
+                chunks,
+            };
+            match cache.put(
+                &key_clone,
+                &provider_prefix,
+                model_clone.as_deref(),
+                &exchange,
+            ) {
+                Ok(()) => {
+                    if let Some(ref tid) = trace_id_clone {
+                        if let Err(e) = cache.record_trace(tid, &key_clone) {
+                            tracing::warn!(err = %e, "failed to record trace on miss");
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!(err = %e, "failed to cache exchange"),
+            }
         }
-    }
+    });
+
+    // Build streaming response
+    let body_stream = ReceiverStream::new(rx);
+    let body = Body::from_stream(body_stream);
 
     let lcp_status = if bypass { "BYPASS" } else { "MISS" };
     let mut response = Response::builder()
@@ -172,23 +225,26 @@ pub async fn handle(
     }
 
     response
-        .body(Body::from(full_body))
+        .body(body)
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 fn serve_cached(exchange: Exchange, key: &str) -> Response {
-    let body: Vec<u8> = exchange
-        .chunks
-        .into_iter()
-        .flat_map(|c| c.data.into_bytes())
-        .collect();
+    // Stream chunks directly — preserves original chunk boundaries
+    let chunk_stream = futures_util::stream::iter(
+        exchange
+            .chunks
+            .into_iter()
+            .map(|c| Ok::<_, std::io::Error>(Bytes::from(c.data))),
+    );
+    let body = Body::from_stream(chunk_stream);
 
     Response::builder()
         .status(exchange.status)
         .header("content-type", &exchange.content_type)
         .header("x-lcp-cache", "HIT")
         .header("x-lcp-key", &key[..12])
-        .body(Body::from(body))
+        .body(body)
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
