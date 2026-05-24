@@ -17,9 +17,17 @@ use tokio::task::JoinHandle;
 #[derive(Clone, Debug)]
 pub struct RecordedRequest {
     pub method: String,
-    pub path: String,
+    pub uri: String,
     pub headers: HeaderMap,
     pub body: Bytes,
+}
+
+impl RecordedRequest {
+    pub fn path(&self) -> &str {
+        self.uri
+            .split_once('?')
+            .map_or(self.uri.as_str(), |(p, _)| p)
+    }
 }
 
 /// A response to queue for MockUpstream.
@@ -177,7 +185,7 @@ async fn handle_request(
 ) -> Response {
     inner.requests.lock().unwrap().push(RecordedRequest {
         method: method.to_string(),
-        path: uri.to_string(),
+        uri: uri.to_string(),
         headers: headers.clone(),
         body: body.clone(),
     });
@@ -234,7 +242,7 @@ mod tests {
 
         let reqs = mock.received_requests();
         assert_eq!(reqs.len(), 1);
-        assert_eq!(reqs[0].path, "/test");
+        assert_eq!(reqs[0].path(), "/test");
     }
 
     #[tokio::test]

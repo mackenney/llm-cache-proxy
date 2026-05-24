@@ -196,7 +196,7 @@ mod tests {
 
         let reqs = harness.mock_requests();
         assert_eq!(reqs.len(), 1);
-        assert!(reqs[0].path.contains("v1/messages"));
+        assert!(reqs[0].path().contains("v1/messages"));
     }
 
     #[tokio::test]
