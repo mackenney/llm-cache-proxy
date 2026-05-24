@@ -1048,6 +1048,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lcp-tests"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures-util",
+ "lcp-core",
+ "lcp-server",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "leb128fmt"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

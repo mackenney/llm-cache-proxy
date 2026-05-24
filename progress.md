@@ -4,24 +4,32 @@
 In Progress
 
 ## Tasks
-- [x] fc-cluster-b: fact-check lcp-server spec vs implementation (5 claims)
-- [x] fc-cluster-c: fact-check admin/stats endpoints and tracing response shape (5 claims)
+
+- [x] Fact-check stream1 plan proxy.rs structural claims → `/tmp/fc-stream1-proxy-code.md`
+- [x] Fact-check server API injection points for test harness (plans/test1/step-04) → `/tmp/fc-test1-server-api.md`
+- [x] Fact-check plans/test1/step-01 Cargo.toml claims → `/tmp/fc-test1-cargo.md`
+- [x] Fact-check stream1 Axum API claims → `/tmp/fc-stream1-axum-api.md`
 
 ## Files Changed
-- artifacts/fc-cluster-b.md — written
-- artifacts/fc-cluster-c.md — written
+
+- `/tmp/fc-stream1-proxy-code.md` (written, git-ignored artifact)
+- `/tmp/fc-test1-server-api.md` (written, git-ignored artifact)
+- `/tmp/fc-test1-cargo.md` (written, git-ignored artifact)
+- `/tmp/fc-stream1-axum-api.md` (written, git-ignored artifact)
 
 ## Notes
-Cluster B fact-check complete. Results:
-- Claim 1 (timeout in ServerConfig): REFUTED — no timeout field
-- Claim 2 (POST+GET routing): CONFIRMED
-- Claim 3 (record_trace on hit+miss): REFUTED — never called anywhere
-- Claim 4 (model extracted before put): CONFIRMED
-- Claim 5 (incoming body decompression): REFUTED — no decompression logic
 
-Cluster C fact-check complete. Results:
-- Claim 1 (by_model keyed as provider/model): REFUTED — groups by model only, no provider prefix (cache.rs:135)
-- Claim 2 (DELETE /cache returns cleared_entries): CONFIRMED — stats.rs:33
-- Claim 3 (trace response serializes status): REFUTED — trace endpoint entirely unimplemented; no route, no status field on CacheEntry, no trace_entries table
-- Claim 4 (DELETE /stats returns cleared:true): CONFIRMED — stats.rs:26
-- Claim 5 (proxy.rs omits x-lcp-key on bypass): REFUTED — x-lcp-key always emitted; also x-lcp-cache:MISS instead of BYPASS
+Claim 5 is REFUTED: AppState begins AT line 18 (not before). All other claims confirmed.
+
+test1 step-04 fact-check: 4/5 CONFIRMED, 1 PARTIAL. Critical gap: `serve()` accepts
+port 0 but never exposes the actual bound address — test harness needs a refactor to
+discover the ephemeral port (e.g., oneshot channel or `bind()`+`run()` split).
+
+test1 step-01 Cargo.toml fact-check: Claims 1 & 2 REFUTED (virtual workspace rejects
+[[test]] and [dev-dependencies]). Claim 3 PARTIAL (deps exist but plan uses version strings
+not workspace refs). Claims 4 & 5 CONFIRMED.
+
+stream1 Axum API fact-check: All 5 claims CONFIRMED. Body::from_stream() exists in
+axum-core 0.5.6 (TryStream bound, not Stream directly, but blanket impl covers it);
+mpsc::Receiver::poll_recv() exists + Receiver<T>: Unpin explicitly impl'd; sync mpsc
+gated on 'sync' feature included in 'full'; stream::iter() chain is type-correct.
