@@ -39,3 +39,19 @@ pub struct CacheEntry {
     pub req_bytes: i64,
     pub resp_bytes: i64,
 }
+
+/// A complete cache row: metadata plus the stored request and response.
+#[derive(Debug, Clone, Serialize)]
+pub struct FullEntry {
+    pub key: String,
+    pub created_at: String, // ISO-8601 UTC
+    pub provider: String,
+    pub model: Option<String>,
+    pub status: u16,
+    pub content_type: String,
+    pub hit_count: i64,
+    pub req_bytes: i64,
+    pub resp_bytes: i64,
+    pub request: RequestRecord,
+    pub chunks: Vec<ResponseChunk>,
+}

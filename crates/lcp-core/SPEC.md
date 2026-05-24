@@ -73,6 +73,8 @@ MUST be safe to share across async tasks without external locking.
 - **`CacheEntry`** (metadata row, no chunks): `key`, `provider`,
   `model: Option<String>`, `status: u16`, `hit_count`, `req_bytes`, `resp_bytes`,
   `created_at` (ISO-8601 UTC string).
+- **`FullEntry`** (complete row including exchange data): all `CacheEntry` fields plus
+  `content_type: String`, `request: RequestRecord`, `chunks: Vec<ResponseChunk>`.
 - **`CacheStats`**: `hits`, `misses`, `bytes_served_from_cache` (from the
   stats counters), `entries` (live count), `by_model` (entry count keyed by the
   raw `model` field value; provider-qualified names such as `"anthropic/claude-sonnet-4"`
@@ -90,9 +92,13 @@ TTL of 0 means entries never expire.
 the same key. `resp_bytes` MUST be computed as the sum of all chunk data
 lengths.
 
-**Tracing (`record_trace`, `get_trace`)**: `record_trace(trace_id, cache_key)`
-persists the association; `get_trace(trace_id)` returns the associated
-`CacheEntry` rows ordered by `created_at`.
+**Tracing (`record_trace`, `get_trace`, `inspect_trace`)**: `record_trace(trace_id, cache_key)`
+persists the association; `get_trace(trace_id)` returns the associated `CacheEntry` rows
+ordered by `created_at`; `inspect_trace(trace_id)` returns the associated `FullEntry` rows
+ordered by `created_at` with no side effects.
+
+**Inspect (`inspect`)**: `inspect(key)` returns the `FullEntry` for a given key, or `None`
+if absent. MUST NOT increment any counter or modify any row (read-only, no side effects).
 
 **Admin (`clear_entries`, `clear_stats`, `stats`, `list_entries`)**: these
 expose aggregate counters and support the admin endpoints in `lcp-server`.

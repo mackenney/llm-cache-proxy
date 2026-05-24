@@ -1,5 +1,5 @@
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde_json::json;
@@ -35,25 +35,56 @@ pub async fn clear_cache(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+pub async fn get_cache_entry(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> impl IntoResponse {
+    match state.config.cache.inspect(&key) {
+        Ok(Some(entry)) => Json(serde_json::to_value(&entry).unwrap()).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, format!("cache key not found: {key}")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct TraceQuery {
+    #[serde(default)]
+    pub full: bool,
+}
+
 pub async fn get_trace(
     State(state): State<AppState>,
     Path(trace_id): Path<String>,
+    Query(params): Query<TraceQuery>,
 ) -> impl IntoResponse {
-    match state.config.cache.get_trace(&trace_id) {
-        Ok(entries) => {
-            let items: Vec<_> = entries
-                .iter()
-                .map(|e| {
-                    json!({
-                        "key": e.key,
-                        "created_at": e.created_at,
-                        "status": e.status,
-                        "hit_count": e.hit_count,
-                    })
-                })
-                .collect();
-            Json(json!({"trace_id": trace_id, "entries": items})).into_response()
+    if params.full {
+        match state.config.cache.inspect_trace(&trace_id) {
+            Ok(entries) => {
+                let items: Vec<_> = entries
+                    .iter()
+                    .map(|e| serde_json::to_value(e).unwrap())
+                    .collect();
+                Json(json!({"trace_id": trace_id, "entries": items})).into_response()
+            }
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    } else {
+        match state.config.cache.get_trace(&trace_id) {
+            Ok(entries) => {
+                let items: Vec<_> = entries
+                    .iter()
+                    .map(|e| {
+                        json!({
+                            "key": e.key,
+                            "created_at": e.created_at,
+                            "status": e.status,
+                            "hit_count": e.hit_count,
+                        })
+                    })
+                    .collect();
+                Json(json!({"trace_id": trace_id, "entries": items})).into_response()
+            }
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
     }
 }

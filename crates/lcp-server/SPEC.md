@@ -45,7 +45,9 @@ async request handlers.
 | `GET` | `/stats` | Aggregate stats |
 | `DELETE` | `/stats` | Reset stats counters |
 | `DELETE` | `/cache` | Purge all cache entries |
-| `GET` | `/trace/<trace-id>` | Trace lookup |
+| `GET` | `/cache/<key>` | Fetch full exchange by cache key; 404 if not found |
+| `GET` | `/trace/<trace-id>` | Trace lookup (metadata) |
+| `GET` | `/trace/<trace-id>?full=true` | Trace lookup with full request/response data |
 | `POST`, `GET` | `/<provider>/<*path>` | Proxy handler |
 
 An unrecognised `<provider>` prefix MUST return HTTP 404.
@@ -119,9 +121,10 @@ and the request is not a bypass:
 
 ### `GET /trace/<trace-id>`
 
-Returns all cache entries associated with the trace, ordered by `created_at`.
+Accepts an optional `?full=true` query parameter.
 
-Response shape:
+Without `?full=true`: returns metadata for all cache entries in the trace, ordered by `created_at`.
+
 ```json
 {
   "trace_id": "<trace-id>",
@@ -130,6 +133,9 @@ Response shape:
   ]
 }
 ```
+
+With `?full=true`: each entry also includes `provider`, `model`, `content_type`,
+`req_bytes`, `resp_bytes`, `request: {method, path, body}`, and `chunks: [{data, offset_ms}]`.
 
 An unknown trace ID returns the same shape with an empty `entries` array.
 

@@ -6,4 +6,4 @@ pub mod types;
 pub use cache::Cache;
 pub use hash::cache_key;
 pub use provider::Provider;
-pub use types::{CacheEntry, Exchange, RequestRecord, ResponseChunk};
+pub use types::{CacheEntry, Exchange, FullEntry, RequestRecord, ResponseChunk};

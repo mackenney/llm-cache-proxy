@@ -18,6 +18,7 @@ pub struct ServerConfig {
     pub anthropic_upstream: Option<String>,
     pub openai_upstream: Option<String>,
     pub openrouter_upstream: Option<String>,
+    pub gemini_upstream: Option<String>,
 }
 
 impl ServerConfig {
@@ -33,6 +34,10 @@ impl ServerConfig {
                 .unwrap_or_else(|| provider.default_upstream().to_owned()),
             lcp_core::Provider::OpenRouter => self
                 .openrouter_upstream
+                .clone()
+                .unwrap_or_else(|| provider.default_upstream().to_owned()),
+            lcp_core::Provider::Gemini => self
+                .gemini_upstream
                 .clone()
                 .unwrap_or_else(|| provider.default_upstream().to_owned()),
         }

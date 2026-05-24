@@ -16,6 +16,7 @@ pub fn build_router(config: Arc<ServerConfig>, client: Arc<reqwest::Client>) -> 
         .route("/stats", get(stats::get_stats))
         .route("/stats", delete(stats::clear_stats))
         .route("/cache", delete(stats::clear_cache))
+        .route("/cache/{key}", get(stats::get_cache_entry))
         .route("/trace/{trace_id}", get(stats::get_trace))
         .route("/{provider}/{*path}", post(proxy::handle))
         .route("/{provider}/{*path}", get(proxy::handle))

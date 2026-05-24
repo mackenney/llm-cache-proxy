@@ -207,9 +207,10 @@ label).
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/trace/<trace-id>` | All cache entries for the trace, ordered by `created_at`. Resolved via JOIN of `trace_entries` and `cache_entries` on `cache_key`. |
+| `GET` | `/trace/<trace-id>` | Metadata for all cache entries in the trace, ordered by `created_at`. |
+| `GET` | `/trace/<trace-id>?full=true` | Same but each entry includes the full request body and response chunks. |
 
-Response shape:
+Default response shape:
 ```json
 {
   "trace_id": "<trace-id>",
@@ -219,6 +220,9 @@ Response shape:
 }
 ```
 
+With `?full=true`, each entry also includes `provider`, `model`, `content_type`,
+`req_bytes`, `resp_bytes`, `request: {method, path, body}`, and `chunks: [{data, offset_ms}]`.
+
 ## Stats and Admin Endpoints
 
 | Method | Path | Description |
@@ -227,6 +231,28 @@ Response shape:
 | `GET` | `/stats` | Hit/miss counts, bytes served, total entries, by-model entry counts. |
 | `DELETE` | `/stats` | Reset the `stats` table counters to zero. Per-entry `hit_count` values and cache entries are unaffected. |
 | `DELETE` | `/cache` | Delete all cache entries and trace entries. The `stats` table counters are unaffected. |
+| `GET` | `/cache/<key>` | Fetch the full exchange (request + response chunks) for a given cache key. Returns 404 if not found. |
+
+### `/cache/<key>` response shape
+
+```json
+{
+  "key": "abc123def456",
+  "created_at": "2026-05-24T02:00:00Z",
+  "provider": "anthropic",
+  "model": "claude-opus-4",
+  "status": 200,
+  "content_type": "text/event-stream",
+  "hit_count": 3,
+  "req_bytes": 142,
+  "resp_bytes": 1024,
+  "request": { "method": "POST", "path": "/anthropic/v1/messages", "body": "..." },
+  "chunks": [
+    { "data": "data: ...\n\n", "offset_ms": 0 },
+    { "data": "data: ...\n\n", "offset_ms": 120 }
+  ]
+}
+```
 
 ### `/stats` response shape
 

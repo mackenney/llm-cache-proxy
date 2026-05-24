@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 
-use crate::types::{CacheEntry, Exchange, ResponseChunk};
+use crate::types::{CacheEntry, Exchange, FullEntry};
 
 /// Thread-safe SQLite-backed cache for LLM exchanges.
 #[derive(Clone)]
@@ -43,22 +43,19 @@ impl Cache {
         let conn = self.inner.lock().unwrap();
 
         let result = conn.query_row(
-            "SELECT created_at, status, content_type, exchange_json, resp_bytes \
-             FROM entries WHERE key = ?1",
+            "SELECT created_at, resp_bytes, exchange_json FROM entries WHERE key = ?1",
             rusqlite::params![key],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
-                    row.get::<_, u16>(1)?,
+                    row.get::<_, i64>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
                 ))
             },
         );
 
         match result {
-            Ok((created_at, status, content_type, json, resp_bytes)) => {
+            Ok((created_at, resp_bytes, json)) => {
                 if self.ttl_seconds > 0 {
                     let age = age_seconds(&created_at);
                     if age > self.ttl_seconds {
@@ -79,14 +76,9 @@ impl Cache {
                      ON CONFLICT(k) DO UPDATE SET v = v + ?1",
                     rusqlite::params![resp_bytes],
                 )?;
-                let chunks: Vec<ResponseChunk> =
-                    serde_json::from_str(&json).context("deserializing cached chunks")?;
-                Ok(Some(Exchange {
-                    request: Default::default(),
-                    status,
-                    content_type,
-                    chunks,
-                }))
+                let exchange: Exchange =
+                    serde_json::from_str(&json).context("deserializing cached exchange")?;
+                Ok(Some(exchange))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 conn.execute(
@@ -110,7 +102,7 @@ impl Cache {
     ) -> Result<()> {
         let conn = self.inner.lock().unwrap();
         let now = iso_now();
-        let chunks_json = serde_json::to_string(&exchange.chunks)?;
+        let exchange_json = serde_json::to_string(exchange)?;
         let resp_bytes: usize = exchange.chunks.iter().map(|c| c.data.len()).sum();
         conn.execute(
             "INSERT OR REPLACE INTO entries
@@ -122,7 +114,7 @@ impl Cache {
                 now,
                 exchange.status,
                 exchange.content_type,
-                chunks_json,
+                exchange_json,
                 provider,
                 model,
                 exchange.request.body.len() as i64,
@@ -238,6 +230,124 @@ impl Cache {
             .collect::<std::result::Result<_, _>>()?;
         Ok(rows)
     }
+
+    /// Fetch the full exchange for a key without incrementing any counter.
+    /// Returns `None` if the key does not exist.
+    pub fn inspect(&self, key: &str) -> Result<Option<FullEntry>> {
+        let conn = self.inner.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT created_at, provider, model, status, content_type, \
+             hit_count, req_bytes, resp_bytes, exchange_json \
+             FROM entries WHERE key = ?1",
+            rusqlite::params![key],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, u16>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, String>(8)?,
+                ))
+            },
+        );
+        match result {
+            Ok((
+                created_at,
+                provider,
+                model,
+                status,
+                content_type,
+                hit_count,
+                req_bytes,
+                resp_bytes,
+                json,
+            )) => {
+                let exchange: Exchange =
+                    serde_json::from_str(&json).context("deserializing inspect exchange")?;
+                Ok(Some(FullEntry {
+                    key: key.to_owned(),
+                    created_at,
+                    provider,
+                    model,
+                    status,
+                    content_type,
+                    hit_count,
+                    req_bytes,
+                    resp_bytes,
+                    request: exchange.request,
+                    chunks: exchange.chunks,
+                }))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Fetch full entries for all keys in a trace, ordered by `created_at`.
+    /// No counters are modified.
+    pub fn inspect_trace(&self, trace_id: &str) -> Result<Vec<FullEntry>> {
+        let conn = self.inner.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT e.key, e.created_at, e.provider, e.model, e.status, e.content_type, \
+             e.hit_count, e.req_bytes, e.resp_bytes, e.exchange_json \
+             FROM entries e \
+             JOIN trace_entries t ON t.cache_key = e.key \
+             WHERE t.trace_id = ?1 \
+             ORDER BY e.created_at ASC",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![trace_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, u16>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, i64>(8)?,
+                    r.get::<_, String>(9)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(
+                |(
+                    key,
+                    created_at,
+                    provider,
+                    model,
+                    status,
+                    content_type,
+                    hit_count,
+                    req_bytes,
+                    resp_bytes,
+                    json,
+                )| {
+                    let exchange: Exchange = serde_json::from_str(&json)
+                        .context("deserializing inspect_trace exchange")?;
+                    Ok(FullEntry {
+                        key,
+                        created_at,
+                        provider,
+                        model,
+                        status,
+                        content_type,
+                        hit_count,
+                        req_bytes,
+                        resp_bytes,
+                        request: exchange.request,
+                        chunks: exchange.chunks,
+                    })
+                },
+            )
+            .collect()
+    }
 }
 
 impl std::fmt::Debug for Cache {
@@ -294,7 +404,7 @@ fn age_seconds(created_at: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::RequestRecord;
+    use crate::types::{RequestRecord, ResponseChunk};
 
     fn temp_cache() -> Cache {
         Cache::open(&":memory:".into(), 0).unwrap()
@@ -413,5 +523,48 @@ mod tests {
         cache.get("k1").unwrap();
         let stats = cache.stats().unwrap();
         assert_eq!(stats.bytes_served_from_cache, 5);
+    }
+
+    #[test]
+    fn inspect_returns_full_entry() {
+        let cache = temp_cache();
+        let ex = make_exchange(200, vec![("data: hi\n\n", 0)]);
+        cache
+            .put("k1", "anthropic", Some("claude-opus-4"), &ex)
+            .unwrap();
+        cache.get("k1").unwrap(); // hit to increment counters
+
+        let entry = cache.inspect("k1").unwrap().unwrap();
+        assert_eq!(entry.key, "k1");
+        assert_eq!(entry.status, 200);
+        assert_eq!(entry.provider, "anthropic");
+        assert_eq!(entry.model.as_deref(), Some("claude-opus-4"));
+        assert_eq!(entry.chunks.len(), 1);
+        assert_eq!(entry.request.method, "POST");
+
+        // inspect MUST NOT increment counters
+        let stats_before = cache.stats().unwrap().hits;
+        cache.inspect("k1").unwrap();
+        assert_eq!(cache.stats().unwrap().hits, stats_before);
+    }
+
+    #[test]
+    fn inspect_unknown_returns_none() {
+        let cache = temp_cache();
+        assert!(cache.inspect("no-such-key").unwrap().is_none());
+    }
+
+    #[test]
+    fn inspect_trace_returns_full_entries() {
+        let cache = temp_cache();
+        let ex = make_exchange(201, vec![("chunk", 0)]);
+        cache.put("k1", "openai", Some("gpt-4o"), &ex).unwrap();
+        cache.record_trace("t1", "k1").unwrap();
+
+        let entries = cache.inspect_trace("t1").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].key, "k1");
+        assert_eq!(entries[0].status, 201);
+        assert_eq!(entries[0].chunks[0].data, "chunk");
     }
 }

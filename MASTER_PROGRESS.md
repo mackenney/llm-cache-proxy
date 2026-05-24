@@ -16,7 +16,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | Plan | What |
 |---|---|
-| _(none yet)_ | Per-crate SPECs + implementation — next step is running planner against root SPEC.md |
+| _(none)_ | |
 
 ---
 
@@ -32,9 +32,15 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | lcp-core skeleton: types, provider enum, hash (BLAKE3, unit tests), cache (SQLite, unit tests) | _(scaffold)_ |
 | lcp-server skeleton: axum router, proxy handler, stats endpoints | _(scaffold)_ |
 | lcp CLI skeleton: clap binary | _(scaffold)_ |
-| SPEC.md review: fixed schema (provider+model columns, stats table), bypass headers, timeout config, streaming note | _(spec-review)_ |
 | `crates/lcp-core/SPEC.md`: behavioral contract for Provider, cache key, Cache, types | _(spec)_ |
 | `crates/lcp-server/SPEC.md`: behavioral contract for routing, proxy pipeline, SSE, tracing, admin endpoints | _(spec)_ |
+
+### Implementation
+
+| What | Ref |
+|---|---|
+| Fix spec gaps: tracing, bypass headers, decompression, timeout, stats (17 tests passing) | 6dfbc71 |
+| Gemini provider, `GET /cache/<key>`, `GET /trace/<id>?full=true`, `FullEntry`/`inspect`/`inspect_trace` (17 tests passing) | _(pending commit)_ |
 
 ---
 
@@ -42,6 +48,5 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | ID | Issue | Plan |
 |---|---|---|
-| CORE-1 | `cargo check` compilation errors not yet verified — skeletons may not compile clean | _(no plan)_ |
-| TEST-1 | `MockUpstream` not implemented — blocks all spec invariant and integration tests | _(no plan)_ |
-| IMPL-1 | Skeleton deviations from spec: Gemini provider missing; proxy buffers full response instead of streaming; `x-lcp-key` absent on HIT responses; `bytes_served_from_cache` not incremented on hit; `trace_entries` table absent; `by_model` groups by model only not provider+model | _(no plan)_ |
+| STREAM-1 | Proxy buffers full upstream response before forwarding — chunks are not streamed to client in real-time | _(no plan)_ |
+| TEST-1 | No `MockUpstream` — blocks spec invariant and integration tests for proxy behavior | _(no plan)_ |

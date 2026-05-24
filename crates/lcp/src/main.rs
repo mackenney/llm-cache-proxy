@@ -42,6 +42,10 @@ struct Cli {
     /// Override the OpenRouter upstream URL.
     #[arg(long, env = "LCP_OPENROUTER_UPSTREAM")]
     openrouter_upstream: Option<String>,
+
+    /// Override the Gemini upstream URL.
+    #[arg(long, env = "LCP_GEMINI_UPSTREAM")]
+    gemini_upstream: Option<String>,
 }
 
 #[tokio::main]
@@ -69,11 +73,13 @@ async fn main() -> Result<()> {
         anthropic_upstream: cli.anthropic_upstream,
         openai_upstream: cli.openai_upstream,
         openrouter_upstream: cli.openrouter_upstream,
+        gemini_upstream: cli.gemini_upstream,
     };
 
     tracing::info!("set ANTHROPIC_BASE_URL=http://{addr}/anthropic");
     tracing::info!("set OPENAI_BASE_URL=http://{addr}/openai");
     tracing::info!("set OPENROUTER_BASE_URL=http://{addr}/openrouter");
+    tracing::info!("set GEMINI_BASE_URL=http://{addr}/gemini");
 
     serve(config).await
 }
