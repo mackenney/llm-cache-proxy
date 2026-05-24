@@ -17,7 +17,6 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | Plan | What |
 |---|---|
 | [test1](plans/test1/PROGRESS.md) | MockUpstream + spec invariant test suite (cache hit/miss, bypass, tracing, admin endpoints) |
-| [fixups1](plans/fixups1/PROGRESS.md) | Eliminate yield_now race, move channel capacity to ServerConfig, rename RecordedRequest.path → uri |
 
 ---
 
@@ -44,6 +43,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | Gemini provider, `GET /cache/<key>`, `GET /trace/<id>?full=true`, `FullEntry`/`inspect`/`inspect_trace` (17 tests passing) | c0230a4 |
 | MockUpstream + TestHarness + 10 Priority 1 spec invariant tests (cache hit/miss, 41 tests passing) | eda6d31 |
 | Replace full-body buffering with true streaming: spawn+channel for cache miss, stream::iter for cache hit | 3ddc80e |
+| fixups1: rename RecordedRequest.path→uri, extract channel capacity, replace yield_now with deterministic drain | 83e2a19 |
 
 ---
 
