@@ -143,8 +143,8 @@ pub async fn handle(
 
     // Create channel for streaming response to client
     // Bounded channel; capacity bounds in-flight chunks and provides backpressure.
-    const STREAM_CHANNEL_CAPACITY: usize = 32;
-    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(STREAM_CHANNEL_CAPACITY);
+    let (tx, rx) =
+        mpsc::channel::<Result<Bytes, std::io::Error>>(state.config.stream_channel_capacity);
 
     // Clone values needed by the spawned task
     let cache = state.config.cache.clone();
@@ -158,68 +158,71 @@ pub async fn handle(
     let status_code = status.as_u16();
 
     // Spawn task to read upstream, forward to client channel, and cache on completion
-    tokio::spawn(async move {
-        let mut chunks: Vec<ResponseChunk> = Vec::new();
-        let mut stream = upstream_resp.bytes_stream();
-        let start = Instant::now();
+    {
+        let mut set = state.background_writes.lock().await;
+        set.spawn(async move {
+            let mut chunks: Vec<ResponseChunk> = Vec::new();
+            let mut stream = upstream_resp.bytes_stream();
+            let start = Instant::now();
 
-        let stream_complete = loop {
-            match stream.next().await {
-                Some(Ok(bytes)) => {
-                    // Only accumulate for cache write; skip string conversion when not caching.
-                    if do_cache {
-                        let offset_ms = start.elapsed().as_millis() as u64;
-                        chunks.push(ResponseChunk {
-                            offset_ms,
-                            data: String::from_utf8_lossy(&bytes).into_owned(),
-                        });
-                    }
-                    // Forward to client; break if client disconnected
-                    if tx.send(Ok(bytes)).await.is_err() {
-                        tracing::debug!("client disconnected mid-stream");
-                        break false; // Don't cache partial responses
-                    }
-                }
-                Some(Err(e)) => {
-                    tracing::warn!(err = %e, chunks = chunks.len(), "upstream stream error");
-                    // Propagate error into response body so client sees an aborted stream.
-                    let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
-                    break false; // Don't cache on error
-                }
-                None => break true, // Stream completed successfully
-            }
-        };
-        drop(tx); // Signal end-of-stream to receiver
-
-        // Cache write only if stream completed successfully and caching is enabled
-        if stream_complete && do_cache {
-            let exchange = Exchange {
-                request: RequestRecord {
-                    method: "POST".into(),
-                    path: full_path_clone,
-                    body: String::from_utf8_lossy(&body_clone).into_owned(),
-                },
-                status: status_code,
-                content_type: content_type_clone,
-                chunks,
-            };
-            match cache.put(
-                &key_clone,
-                &provider_prefix,
-                model_clone.as_deref(),
-                &exchange,
-            ) {
-                Ok(()) => {
-                    if let Some(ref tid) = trace_id_clone {
-                        if let Err(e) = cache.record_trace(tid, &key_clone) {
-                            tracing::warn!(err = %e, "failed to record trace on miss");
+            let stream_complete = loop {
+                match stream.next().await {
+                    Some(Ok(bytes)) => {
+                        // Only accumulate for cache write; skip string conversion when not caching.
+                        if do_cache {
+                            let offset_ms = start.elapsed().as_millis() as u64;
+                            chunks.push(ResponseChunk {
+                                offset_ms,
+                                data: String::from_utf8_lossy(&bytes).into_owned(),
+                            });
+                        }
+                        // Forward to client; break if client disconnected
+                        if tx.send(Ok(bytes)).await.is_err() {
+                            tracing::debug!("client disconnected mid-stream");
+                            break false; // Don't cache partial responses
                         }
                     }
+                    Some(Err(e)) => {
+                        tracing::warn!(err = %e, chunks = chunks.len(), "upstream stream error");
+                        // Propagate error into response body so client sees an aborted stream.
+                        let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
+                        break false; // Don't cache on error
+                    }
+                    None => break true, // Stream completed successfully
                 }
-                Err(e) => tracing::warn!(err = %e, "failed to cache exchange"),
+            };
+            drop(tx); // Signal end-of-stream to receiver
+
+            // Cache write only if stream completed successfully and caching is enabled
+            if stream_complete && do_cache {
+                let exchange = Exchange {
+                    request: RequestRecord {
+                        method: "POST".into(),
+                        path: full_path_clone,
+                        body: String::from_utf8_lossy(&body_clone).into_owned(),
+                    },
+                    status: status_code,
+                    content_type: content_type_clone,
+                    chunks,
+                };
+                match cache.put(
+                    &key_clone,
+                    &provider_prefix,
+                    model_clone.as_deref(),
+                    &exchange,
+                ) {
+                    Ok(()) => {
+                        if let Some(ref tid) = trace_id_clone {
+                            if let Err(e) = cache.record_trace(tid, &key_clone) {
+                                tracing::warn!(err = %e, "failed to record trace on miss");
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!(err = %e, "failed to cache exchange"),
+                }
             }
-        }
-    });
+        });
+    }
 
     // Build streaming response
     let body_stream = ReceiverStream::new(rx);
