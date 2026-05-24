@@ -105,6 +105,11 @@ async fn test_gemini_stream_generate_content_model_extracted() {
 
     let entries = harness.cache().list_entries().unwrap();
     assert_eq!(
+        entries.len(),
+        1,
+        "test_gemini_stream_generate_content_model_extracted: expected one cache entry"
+    );
+    assert_eq!(
         entries[0].model.as_deref(),
         Some("gemini-1.5-pro"),
         "streamGenerateContent verb must not appear in extracted model name"
@@ -145,6 +150,11 @@ async fn test_anthropic_model_extracted_from_body() {
 
     let entries = harness.cache().list_entries().unwrap();
     assert_eq!(
+        entries.len(),
+        1,
+        "test_anthropic_model_extracted_from_body: expected one cache entry"
+    );
+    assert_eq!(
         entries[0].model.as_deref(),
         Some("claude-sonnet-4-20250514"),
         "Anthropic model must come from request body"
@@ -179,6 +189,11 @@ async fn test_openai_model_extracted_from_body() {
     harness.wait_for_writes().await;
 
     let entries = harness.cache().list_entries().unwrap();
+    assert_eq!(
+        entries.len(),
+        1,
+        "test_openai_model_extracted_from_body: expected one cache entry"
+    );
     assert_eq!(
         entries[0].model.as_deref(),
         Some("gpt-4o"),
