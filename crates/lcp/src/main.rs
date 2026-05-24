@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
         openai_upstream: cli.openai_upstream,
         openrouter_upstream: cli.openrouter_upstream,
         gemini_upstream: cli.gemini_upstream,
-        stream_channel_capacity: 32,
+        stream_channel_capacity: 32, // not yet exposed as a CLI flag
     };
 
     tracing::info!("set ANTHROPIC_BASE_URL=http://{addr}/anthropic");

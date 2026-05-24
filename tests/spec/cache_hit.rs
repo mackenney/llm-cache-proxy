@@ -32,7 +32,7 @@ async fn setup_hit_harness() -> (TestHarness, String) {
         .unwrap();
 
     let first_body = resp.text().await.unwrap();
-    // Yield to let the proxy's spawned cache-write task complete before tests check HIT.
+    // Drain background write queue before asserting cache state.
     harness.wait_for_writes().await;
     (harness, first_body)
 }

@@ -157,7 +157,8 @@ pub async fn handle(
     let content_type_clone = content_type.clone();
     let status_code = status.as_u16();
 
-    // Spawn task to read upstream, forward to client channel, and cache on completion
+    // Spawn task to read upstream, forward to client channel, and cache on completion.
+    // Reap any already-completed tasks to prevent unbounded handle accumulation.
     {
         let mut set = state.background_writes.lock().await;
         set.spawn(async move {
@@ -222,6 +223,8 @@ pub async fn handle(
                 }
             }
         });
+        // Reap completed tasks without blocking; prevents unbounded handle accumulation.
+        while set.try_join_next().is_some() {}
     }
 
     // Build streaming response
