@@ -39,6 +39,9 @@ pub enum MockResponse {
     Sse { status: u16, chunks: Vec<String> },
     /// Error response with status and body.
     Error { status: u16, body: String },
+    /// Never responds — sleeps indefinitely to simulate a hung upstream.
+    /// Use with a short proxy timeout to test gateway timeout behavior.
+    Hang,
 }
 
 struct Inner {
@@ -170,6 +173,12 @@ impl MockUpstreamBuilder {
         })
     }
 
+    /// Queue a response that never arrives — sleeps 1 hour before replying.
+    /// Pair with a short proxy timeout to test gateway error behavior.
+    pub fn hang(self) -> Self {
+        self.response(MockResponse::Hang)
+    }
+
     /// Build and start the mock server.
     pub async fn build(self) -> MockUpstream {
         MockUpstream::start(self.responses).await
@@ -222,6 +231,10 @@ async fn handle_request(
             body,
         )
             .into_response(),
+        MockResponse::Hang => {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            StatusCode::OK.into_response()
+        }
     }
 }
 
@@ -287,5 +300,18 @@ mod tests {
 
         let resp = reqwest::get(format!("{}/empty", mock.url())).await.unwrap();
         assert_eq!(resp.status(), 500);
+    }
+
+    #[tokio::test]
+    async fn mock_hang_causes_client_timeout() {
+        let mock = MockUpstream::builder().hang().build().await;
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(200))
+            .build()
+            .unwrap();
+
+        let result = client.get(format!("{}/hang", mock.url())).send().await;
+        assert!(result.is_err(), "expected timeout error, got: {:?}", result);
     }
 }

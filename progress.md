@@ -3,53 +3,52 @@
 ## Status
 Complete
 
+## Task
+Produce implementation plan for P1 behavioral correctness + P2 error path tests.
+
+## Output
+Plan written to: `artifacts/plan-tests-p1-p2.md`
+
+## Summary
+- 9 implementation steps covering 6 P1 gaps and 2 P2 gaps
+- P1 (spec invariants): routing.rs, bypass.rs, forwarding.rs, tracing.rs, model_extraction.rs extension
+- P2 (integration): timeout.rs with MockUpstream::Hang extension
+- Key decision: Extend MockUpstream with Hang variant for timeout testing
+- Key decision: Use shutdown-then-connect trick for unreachable testing
+- All steps independently committable
+
+## Files Changed
+- artifacts/plan-tests-p1-p2.md (created)
+
+## Notes
+- Steps 1, 2, 4, 5, 6, 7, 9 can execute in parallel (no dependencies)
+- P2 timeout test requires MockUpstream extension (Step 7) before Step 8
+
 ---
 
-## Implementation Planner (artifacts/plan-gemini-impl.md)
+# Progress (P3 + P4 Planner)
 
-### Tasks
-- [x] Analyze Provider enum in lcp-core/src/provider.rs
-- [x] Analyze extract_model() in lcp-server/src/proxy.rs
-- [x] Review SPEC constraints (cache key invariant, dependency direction)
-- [x] Write implementation plan to artifacts/plan-gemini-impl.md
+## Status
+Complete
 
-### Key Decisions
-1. Add `Provider::extract_model_from_path()` method in lcp-core
-2. Use simple string parsing (find + slice) over regex
-3. Fallback chain: path extraction → body extraction
-4. Return bare model name (consistent with other providers)
+## Task
+Produce implementation plan for P3 edge cases + P4 admin endpoint tests.
 
-### Notes
-- Cache keys already include full path with model — no change needed
-- Dependency direction preserved (server → core)
-- Other providers unaffected (their path extraction returns None)
+## Output
+Plan written to: `artifacts/plan-tests-p3-p4.md`
 
----
+## Summary
+- 11 implementation steps covering 5 P3 edge cases and 6 P4 admin tests
+- P3 (spec invariants): compression.rs, tracing.rs (edge cases only), model_extraction.rs extension
+- P4 (spec invariants): admin.rs
+- P4 (integration): ttl.rs
+- Key decision: Extend TestHarnessBuilder with `.ttl(seconds)` method
+- Key decision: Add flate2 dev-dep for gzip compression test helpers
+- Key decision: TTL tests in integration tier (require real time passage)
 
-## Spec + Tests Planner (artifacts/plan-gemini-spec-tests.md)
+## Files Changed
+- artifacts/plan-tests-p3-p4.md (created)
 
-### Tasks
-- [x] Read SPEC.md lines 271-274 (by_model documentation)
-- [x] Read crates/lcp-server/SPEC.md (proxy behavior, model extraction)
-- [x] Read crates/lcp-core/SPEC.md (CacheStats, by_model)
-- [x] Review existing spec tests (cache_hit.rs, cache_miss.rs patterns)
-- [x] Review test infrastructure (TestHarness, MockUpstream)
-- [x] Write spec+tests plan to artifacts/plan-gemini-spec-tests.md
-
-### Spec Changes Planned
-1. **crates/lcp-server/SPEC.md** — New "Model Extraction" subsection with per-provider table
-2. **crates/lcp-core/SPEC.md** — Update CacheStats.by_model description (remove body-only assumption)
-3. **SPEC.md** — Update by_model documentation to explain Gemini path extraction
-
-### Tests Planned
-1. `tests/spec/model_extraction.rs` — New test file
-2. `test_gemini_model_extracted_from_path` — Core GEMINI-1 fix validation
-3. `test_gemini_model_appears_in_stats_by_model` — Stats integration
-4. `test_gemini_stream_generate_content_model_extracted` — Alternative verb
-5. `test_anthropic_model_extracted_from_body` — Regression guard
-6. `test_openai_model_extracted_from_body` — Regression guard
-
-### Notes
-- All tests use existing TestHarness + MockUpstream infrastructure
-- No new dependencies required
-- Tests should fail (red) before implementation merges, pass after (green)
+## Notes
+- No overlap with P1/P2 planner: P1 covers bypass/routing/tracing-endpoint, P3 covers trace-aggregation edge cases
+- Steps 3-9 (spec tests) can execute in parallel after Steps 1-2 (harness/dep changes)

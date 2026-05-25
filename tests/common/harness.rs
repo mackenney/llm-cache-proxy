@@ -84,6 +84,8 @@ impl Drop for TestHarness {
 pub struct TestHarnessBuilder {
     mock: Option<MockUpstream>,
     timeout_seconds: u64,
+    ttl_seconds: u64,
+    upstream_url: Option<String>,
 }
 
 impl TestHarnessBuilder {
@@ -91,9 +93,10 @@ impl TestHarnessBuilder {
         Self {
             mock: None,
             timeout_seconds: 30,
+            ttl_seconds: 0,
+            upstream_url: None,
         }
     }
-
     /// Set the mock upstream server (required).
     pub fn mock(mut self, mock: MockUpstream) -> Self {
         self.mock = Some(mock);
@@ -106,6 +109,20 @@ impl TestHarnessBuilder {
         self
     }
 
+    /// Set cache TTL in seconds (default: 0 = never expire).
+    /// Use in integration tests that verify entry expiry.
+    pub fn ttl(mut self, seconds: u64) -> Self {
+        self.ttl_seconds = seconds;
+        self
+    }
+
+    /// Override the upstream URL the proxy forwards requests to (default: mock.url()).
+    /// Use to point the proxy at a dead address for unreachable-upstream tests.
+    pub fn upstream_url(mut self, url: String) -> Self {
+        self.upstream_url = Some(url);
+        self
+    }
+
     /// Build and start the test harness.
     ///
     /// # Panics
@@ -113,17 +130,19 @@ impl TestHarnessBuilder {
     pub async fn build(self) -> TestHarness {
         let mock = self.mock.expect("TestHarness requires a MockUpstream");
         let mock_url = mock.url();
+        let upstream = self.upstream_url.unwrap_or_else(|| mock_url.clone());
 
-        let cache = Cache::open(&":memory:".into(), 0).expect("open in-memory cache");
+        let cache =
+            Cache::open(&":memory:".into(), self.ttl_seconds).expect("open in-memory cache");
 
         let config = ServerConfig {
             addr: "127.0.0.1:0".parse().unwrap(),
             cache: cache.clone(),
             timeout_seconds: self.timeout_seconds,
-            anthropic_upstream: Some(mock_url.clone()),
-            openai_upstream: Some(mock_url.clone()),
-            openrouter_upstream: Some(mock_url.clone()),
-            gemini_upstream: Some(mock_url.clone()),
+            anthropic_upstream: Some(upstream.clone()),
+            openai_upstream: Some(upstream.clone()),
+            openrouter_upstream: Some(upstream.clone()),
+            gemini_upstream: Some(upstream.clone()),
             stream_channel_capacity: 32,
         };
 

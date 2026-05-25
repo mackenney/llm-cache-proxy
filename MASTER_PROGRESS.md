@@ -16,7 +16,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | Plan | What |
 |---|---|
-| _(none)_ | |
+| [tests1](plans/tests1/PROGRESS.md) | 20+ spec invariant + integration tests: routing, bypass, forwarding, tracing, admin, model extraction, compression, timeout, TTL (12 steps, 3 waves) |
 
 ---
 
