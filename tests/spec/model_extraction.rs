@@ -200,3 +200,115 @@ async fn test_openai_model_extracted_from_body() {
         "OpenAI model must come from request body"
     );
 }
+
+#[tokio::test]
+async fn test_openrouter_model_extracted_from_body() {
+    let mock = MockUpstream::builder()
+        .sse(
+            200,
+            vec!["data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n"],
+        )
+        .build()
+        .await;
+    let harness = TestHarness::builder().mock(mock).build().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!(
+            "{}/openrouter/v1/chat/completions",
+            harness.proxy_url()
+        ))
+        .header("authorization", "Bearer test-key")
+        .header("content-type", "application/json")
+        .body(
+            r#"{"model":"anthropic/claude-sonnet-4","messages":[{"role":"user","content":"hi"}]}"#,
+        )
+        .send()
+        .await
+        .unwrap();
+    let _ = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    let entries = harness.cache().list_entries().unwrap();
+    assert_eq!(
+        entries.len(),
+        1,
+        "test_openrouter_model_extracted_from_body: expected one cache entry"
+    );
+    assert_eq!(
+        entries[0].model.as_deref(),
+        Some("anthropic/claude-sonnet-4"),
+        "OpenRouter model must be extracted from request body with provider prefix preserved"
+    );
+}
+
+#[tokio::test]
+async fn test_malformed_json_body_stores_model_none() {
+    let mock = MockUpstream::builder()
+        .sse(
+            200,
+            vec!["event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"],
+        )
+        .build()
+        .await;
+    let harness = TestHarness::builder().mock(mock).build().await;
+    let client = reqwest::Client::new();
+
+    // Send a body that is not valid JSON — proxy must not panic; model stored as None.
+    let resp = client
+        .post(format!("{}/anthropic/v1/messages", harness.proxy_url()))
+        .header("x-api-key", "test-key")
+        .header("content-type", "application/json")
+        .body("not valid json{{{")
+        .send()
+        .await
+        .unwrap();
+    let _ = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    let entries = harness.cache().list_entries().unwrap();
+    // Entry may or may not be stored depending on upstream response status, but if stored:
+    if !entries.is_empty() {
+        assert!(
+            entries[0].model.is_none(),
+            "malformed JSON body must result in model: None; got: {:?}",
+            entries[0].model
+        );
+    }
+    // If no entry was stored (e.g., upstream rejected the request), the proxy at least did not panic.
+    // The test passes as long as we reach this line.
+}
+
+#[tokio::test]
+async fn test_gemini_unrecognized_path_stores_model_none() {
+    let mock = MockUpstream::builder()
+        .sse(200, gemini_sse_chunks())
+        .build()
+        .await;
+    let harness = TestHarness::builder().mock(mock).build().await;
+    let client = reqwest::Client::new();
+
+    // Path missing the model segment — does not match the expected pattern.
+    let resp = client
+        .post(format!(
+            "{}/gemini/v1/projects/x/locations/y/publishers/google/models:generateContent",
+            harness.proxy_url()
+        ))
+        .query(&[("key", "test-api-key")])
+        .header("content-type", "application/json")
+        .body(gemini_request_body())
+        .send()
+        .await
+        .unwrap();
+    let _ = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    let entries = harness.cache().list_entries().unwrap();
+    if !entries.is_empty() {
+        assert!(
+            entries[0].model.is_none(),
+            "unrecognized Gemini path must result in model: None; got: {:?}",
+            entries[0].model
+        );
+    }
+}
