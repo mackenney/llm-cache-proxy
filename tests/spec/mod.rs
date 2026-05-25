@@ -5,6 +5,12 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod admin;
+mod bypass;
 mod cache_hit;
 mod cache_miss;
+mod compression;
+mod forwarding;
 mod model_extraction;
+mod routing;
+mod tracing;
