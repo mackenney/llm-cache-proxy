@@ -1,3 +1,5 @@
+use crate::Provider;
+
 /// Compute the cache key for a request.
 ///
 /// The key is a BLAKE3 hex digest of the normalized request body. Normalization
@@ -7,8 +9,8 @@
 ///
 /// The `method` and `path` are included so that structurally identical bodies
 /// sent to different endpoints never collide.
-pub fn cache_key(method: &str, path: &str, body: &[u8]) -> String {
-    let normalized = normalize_body(body);
+pub fn cache_key(provider: Provider, method: &str, path: &str, body: &[u8]) -> String {
+    let normalized = normalize_body(provider, body);
     let mut hasher = blake3::Hasher::new();
     hasher.update(method.as_bytes());
     hasher.update(b"|");
@@ -24,11 +26,12 @@ pub fn cache_key(method: &str, path: &str, body: &[u8]) -> String {
 ///   produces a stable key for that exact byte sequence).
 /// - Strips semantic-free fields: `stream`.
 /// - Sorts all object keys recursively.
-fn normalize_body(body: &[u8]) -> String {
+fn normalize_body(provider: Provider, body: &[u8]) -> String {
     let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
         return String::from_utf8_lossy(body).into_owned();
     };
     strip_fields(&mut value, &["stream"]);
+    strip_fields(&mut value, provider.normalization_strip_fields());
     sort_keys(&mut value);
     serde_json::to_string(&value).unwrap_or_else(|_| String::from_utf8_lossy(body).into_owned())
 }
@@ -72,13 +75,14 @@ fn sort_keys(value: &mut serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Provider;
 
     #[test]
     fn identical_bodies_same_key() {
         let body = br#"{"model":"claude-opus-4","messages":[{"role":"user","content":"hello"}]}"#;
         assert_eq!(
-            cache_key("POST", "/anthropic/v1/messages", body),
-            cache_key("POST", "/anthropic/v1/messages", body)
+            cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", body),
+            cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", body)
         );
     }
 
@@ -87,8 +91,18 @@ mod tests {
         let with_stream = br#"{"model":"claude-opus-4","stream":true,"messages":[]}"#;
         let without_stream = br#"{"model":"claude-opus-4","messages":[]}"#;
         assert_eq!(
-            cache_key("POST", "/anthropic/v1/messages", with_stream),
-            cache_key("POST", "/anthropic/v1/messages", without_stream),
+            cache_key(
+                Provider::Anthropic,
+                "POST",
+                "/anthropic/v1/messages",
+                with_stream
+            ),
+            cache_key(
+                Provider::Anthropic,
+                "POST",
+                "/anthropic/v1/messages",
+                without_stream
+            ),
         );
     }
 
@@ -97,8 +111,8 @@ mod tests {
         let a = br#"{"messages":[],"model":"claude-opus-4"}"#;
         let b = br#"{"model":"claude-opus-4","messages":[]}"#;
         assert_eq!(
-            cache_key("POST", "/anthropic/v1/messages", a),
-            cache_key("POST", "/anthropic/v1/messages", b),
+            cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", a),
+            cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", b),
         );
     }
 
@@ -107,8 +121,8 @@ mod tests {
         let a = br#"{"model":"claude-opus-4","messages":[{"role":"user","content":"hello"}]}"#;
         let b = br#"{"model":"claude-opus-4","messages":[{"role":"user","content":"world"}]}"#;
         assert_ne!(
-            cache_key("POST", "/anthropic/v1/messages", a),
-            cache_key("POST", "/anthropic/v1/messages", b),
+            cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", a),
+            cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", b),
         );
     }
 
@@ -116,16 +130,21 @@ mod tests {
     fn different_paths_different_keys() {
         let body = br#"{"model":"gpt-4o","messages":[]}"#;
         assert_ne!(
-            cache_key("POST", "/openai/v1/chat/completions", body),
-            cache_key("POST", "/anthropic/v1/messages", body),
+            cache_key(
+                Provider::Anthropic,
+                "POST",
+                "/openai/v1/chat/completions",
+                body
+            ),
+            cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", body),
         );
     }
 
     #[test]
     fn invalid_json_hashes_raw() {
         let body = b"not json at all";
-        let k1 = cache_key("POST", "/anthropic/v1/messages", body);
-        let k2 = cache_key("POST", "/anthropic/v1/messages", body);
+        let k1 = cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", body);
+        let k2 = cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", body);
         assert_eq!(k1, k2);
     }
 }
