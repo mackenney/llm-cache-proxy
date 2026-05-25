@@ -65,12 +65,9 @@ blake3(method + "|" + path + "|" + normalized_body)
 
 ### Normalization rules
 
-1. Parse the request body as JSON. If parsing fails, use the raw byte
-   sequence as-is.
-2. Strip the `stream` field at any depth — it affects transport behavior but
-   not the logical response.
-3. Sort all JSON object keys recursively (depth-first).
-4. Serialize back to compact JSON.
+Normalization rules — including per-provider strip lists, MUST NOT strip
+constraints, and ordering — are defined authoritatively in
+`crates/lcp-core/SPEC.md`.
 
 Headers are NOT included in the key. API key rotation MUST NOT bust the
 cache.
@@ -279,11 +276,30 @@ without one.
 
 ## Configuration
 
-All options are available as CLI flags and matching env vars. CLI flags take
-priority over env vars.
+### Precedence
+
+Options are resolved in the following order (highest wins):
+
+1. CLI flag
+2. Environment variable
+3. Config file
+4. Built-in default
+
+### Config file
+
+lcp reads a TOML config file on startup:
+
+- Default path: `$XDG_CONFIG_HOME/lcp/config.toml` (falls back to `~/.config/lcp/config.toml`)
+- Override with `--config <path>` or the `LCP_CONFIG` env var
+- Missing files are silently ignored
+- Keys match long flag names with hyphens replaced by underscores (e.g. `anthropic_upstream`)
+- A malformed config file MUST emit a warning to stderr and be ignored entirely
+
+### Flags
 
 | Flag | Env var | Default | Description |
 |---|---|---|---|
+| `--config` | `LCP_CONFIG` | `$XDG_CONFIG_HOME/lcp/config.toml` | Config file path |
 | `--port` | `LCP_PORT` | `9001` | Listen port |
 | `--host` | `LCP_HOST` | `127.0.0.1` | Bind host |
 | `--db` | `LCP_DB` | `~/.cache/lcp/cache.db` | SQLite path |
@@ -293,6 +309,7 @@ priority over env vars.
 | `--openai-upstream` | `LCP_OPENAI_UPSTREAM` | see table above | OpenAI upstream |
 | `--openrouter-upstream` | `LCP_OPENROUTER_UPSTREAM` | see table above | OpenRouter upstream |
 | `--gemini-upstream` | `LCP_GEMINI_UPSTREAM` | see table above | Gemini upstream |
+| `--print-config` | _(none)_ | _(flag)_ | Print effective config as TOML and exit |
 
 ## Extension Architecture
 

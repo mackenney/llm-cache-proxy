@@ -1,4 +1,5 @@
 //! MockUpstream — HTTP mock server for simulating LLM provider APIs.
+#![allow(dead_code)]
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;

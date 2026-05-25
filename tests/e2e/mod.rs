@@ -7,4 +7,4 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-// Test modules will be added when E2E scope is planned
+mod cli;

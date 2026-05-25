@@ -53,5 +53,5 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | ID | Issue | Plan |
 |---|---|---|
-| CLI-1 | CLI/env-var config not tested (`--port`, `LCP_PORT`, `--db`, `LCP_DB`, flag precedence over env) — requires spawning real binary; e2e tier | _(no plan)_ |
+| CLI-1 | ~~CLI/env-var config not tested~~ — closed; 17 e2e tests cover flag/env/file precedence | _(done)_ |
 | PROXY-1 | `Content-Encoding` header not stripped from forwarded request after body decompression — upstream may reject double-encoded requests | _(no plan)_ |

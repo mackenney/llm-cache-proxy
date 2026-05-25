@@ -1,4 +1,5 @@
 //! TestHarness — wires MockUpstream, proxy server, and cache for integration testing.
+#![allow(dead_code)]
 
 use std::net::SocketAddr;
 use std::sync::Arc;

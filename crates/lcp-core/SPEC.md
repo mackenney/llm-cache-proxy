@@ -30,33 +30,68 @@ All type definitions shared across the crate boundary (`Exchange`,
 
 ## Provider
 
-`Provider` is a Rust `enum` with exactly four variants:
+The provider registry recognizes four providers, each identified by a URL
+prefix and paired with a default upstream base URL:
 
-| Variant | URL prefix | Default upstream |
+| Provider | URL prefix | Default upstream |
 |---|---|---|
-| `Anthropic` | `anthropic` | `https://api.anthropic.com` |
-| `OpenAi` | `openai` | `https://api.openai.com` |
-| `OpenRouter` | `openrouter` | `https://openrouter.ai/api` |
-| `Gemini` | `gemini` | `https://generativelanguage.googleapis.com` |
+| Anthropic | `anthropic` | `https://api.anthropic.com` |
+| OpenAI | `openai` | `https://api.openai.com` |
+| OpenRouter | `openrouter` | `https://openrouter.ai/api` |
+| Gemini | `gemini` | `https://generativelanguage.googleapis.com` |
 
-`Provider` MUST expose:
-- `from_prefix(s: &str) -> Option<Provider>` — parses a URL prefix.
-- `path_prefix(self) -> &'static str` — returns the canonical prefix.
-- `default_upstream(self) -> &'static str` — returns the default base URL.
+The provider registry MUST support:
+- Resolving a URL prefix string to a provider identity, returning an absent
+  result if the prefix is unrecognized.
+- Returning the canonical URL prefix for a given provider.
+- Returning the default upstream base URL for a given provider.
+- Providing the provider-specific set of request body fields to strip during
+  normalization, beyond the fields stripped for all providers.
 
 ## Cache Key
 
-`cache_key(method: &str, path: &str, body: &[u8]) -> String` MUST return a
-BLAKE3 hex digest of `method + "|" + path + "|" + normalized_body`.
+The key derivation function MUST accept a provider identity, HTTP method, URL
+path, and request body as inputs, and MUST produce a deterministic string
+output — a BLAKE3 hex digest of `method + "|" + path + "|" + normalized_body`.
+Normalization is provider-aware: the set of fields stripped from the body
+depends on the provider.
 
-Normalization rules (applied to `body`):
-1. Parse as JSON. On failure, use the raw bytes (UTF-8 lossy) verbatim.
-2. Strip the `stream` field at any depth — it affects transport only.
-3. Sort all JSON object keys recursively.
-4. Re-serialize to compact JSON.
+> **Implementation note:** Provider-aware normalization is a planned extension.
+> The current implementation strips only `stream` and is provider-unaware.
+> The rules below describe the target behavior.
 
-The `model` field MUST NOT be stripped. HTTP headers MUST NOT contribute to
-the key.
+Normalization rules (applied to the request body):
+1. Parse as JSON. On failure, use the raw byte sequence verbatim.
+2. Strip transport-only fields common to all providers:
+   - `stream` — affects transport only, not model output.
+3. Strip the provider-specific attribution and routing fields listed below.
+4. Sort all JSON object keys recursively (depth-first).
+5. Re-serialize to compact JSON.
+
+Per-provider attribution and routing fields that MUST be stripped during
+normalization:
+
+| Provider | Additional fields stripped | Reason |
+|---|---|---|
+| Anthropic | `metadata` (entire object, any depth) | User attribution; no effect on model output |
+| OpenAI | `user` | User attribution; no effect on model output |
+| OpenRouter | `user`, `provider`, `route` | User attribution and routing preference; see note below |
+| Gemini | _(none)_ | No known attribution or routing fields in body |
+
+> **Note on OpenRouter `provider` and `route`:** These fields SHOULD be stripped
+> as an accepted approximation. When OpenRouter fallback routing selects a
+> different model variant, the cached response may not be byte-identical but
+> remains semantically equivalent for caching purposes.
+
+Fields that MUST NOT be stripped:
+- `model` — primary cache discriminator.
+- `temperature`, `top_p`, and all other sampling parameters — affect output distribution.
+- `seed` — controls deterministic output.
+- `transforms` (OpenRouter) — rewrites prompt content before forwarding; semantic field.
+- `thinking` (Anthropic) — controls extended chain-of-thought reasoning; affects response structure and content.
+- `reasoning` (OpenRouter) — controls extended reasoning; affects response structure and content.
+
+HTTP headers MUST NOT contribute to the key.
 
 ## Cache
 

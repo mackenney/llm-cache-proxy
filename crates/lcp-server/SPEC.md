@@ -59,7 +59,8 @@ An unrecognised `<provider>` prefix MUST return HTTP 404.
 1. Parse `<provider>` from the path prefix via `Provider::from_prefix`; 404
    on unknown.
 2. Check for `x-lcp-bypass: 1` header.
-3. Compute the cache key via `cache_key(method, path, body)`.
+3. Compute the cache key by passing the resolved provider, method, path, and body
+   to the key computation function.
 4. If bypassing: skip to [Bypass](#bypass).
 5. Otherwise: attempt a cache read.
 

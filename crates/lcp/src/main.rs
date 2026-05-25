@@ -1,8 +1,9 @@
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::Parser;
+use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
 
 use lcp_core::Cache;
@@ -11,6 +12,14 @@ use lcp_server::{ServerConfig, serve};
 #[derive(Parser, Debug)]
 #[command(name = "lcp", about = "Local LLM API caching proxy")]
 struct Cli {
+    /// Path to config file (TOML). Defaults to $XDG_CONFIG_HOME/lcp/config.toml.
+    #[arg(long, env = "LCP_CONFIG")]
+    config: Option<PathBuf>,
+
+    /// Print effective configuration as TOML and exit.
+    #[arg(long)]
+    print_config: bool,
+
     /// Port to listen on.
     #[arg(long, env = "LCP_PORT", default_value = "9001")]
     port: u16,
@@ -48,13 +57,157 @@ struct Cli {
     gemini_upstream: Option<String>,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Subset of config that can be set via the TOML config file.
+/// Keys match long flag names with hyphens replaced by underscores.
+#[derive(Deserialize, Default)]
+struct FileConfig {
+    port: Option<u16>,
+    host: Option<String>,
+    db: Option<String>,
+    ttl: Option<u64>,
+    timeout: Option<u64>,
+    anthropic_upstream: Option<String>,
+    openai_upstream: Option<String>,
+    openrouter_upstream: Option<String>,
+    gemini_upstream: Option<String>,
+}
+
+/// Scan argv for `--config <path>` or `--config=<path>` without a full parse.
+/// Used before the tokio runtime starts so env-var seeding is single-threaded.
+fn config_path_from_args() -> Option<PathBuf> {
+    let args: Vec<String> = std::env::args().collect();
+    // Also honour LCP_CONFIG env var at this stage.
+    if let Ok(v) = std::env::var("LCP_CONFIG") {
+        if !v.is_empty() {
+            return Some(PathBuf::from(v));
+        }
+    }
+    let mut iter = args.iter().peekable();
+    while let Some(arg) = iter.next() {
+        if arg == "--config" {
+            return iter.next().map(PathBuf::from);
+        }
+        if let Some(path) = arg.strip_prefix("--config=") {
+            return Some(PathBuf::from(path));
+        }
+    }
+    None
+}
+
+fn default_config_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("lcp")
+        .join("config.toml")
+}
+
+/// Read the config file and pre-seed any `LCP_*` env vars that are not already
+/// set. This runs before the tokio runtime so it is safe to call `set_var`.
+/// Precedence after seeding: CLI flag > env var (real or seeded) > built-in default.
+fn seed_env_from_config_file(path: &Path) {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => return, // missing file is silently ignored
+    };
+    let fc: FileConfig = match toml::from_str(&contents) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!(
+                "lcp: warning: ignoring malformed config file {}: {e}",
+                path.display()
+            );
+            return;
+        }
+    };
+
+    macro_rules! seed {
+        ($var:literal, $val:expr) => {
+            if let Some(v) = $val {
+                if std::env::var($var).is_err() {
+                    // SAFETY: called in fn main() before the tokio multi-thread
+                    // runtime is constructed, so no other threads exist yet.
+                    unsafe { std::env::set_var($var, v.to_string()) };
+                }
+            }
+        };
+    }
+
+    seed!("LCP_PORT", fc.port);
+    seed!("LCP_HOST", fc.host);
+    seed!("LCP_DB", fc.db);
+    seed!("LCP_TTL", fc.ttl);
+    seed!("LCP_TIMEOUT", fc.timeout);
+    seed!("LCP_ANTHROPIC_UPSTREAM", fc.anthropic_upstream);
+    seed!("LCP_OPENAI_UPSTREAM", fc.openai_upstream);
+    seed!("LCP_OPENROUTER_UPSTREAM", fc.openrouter_upstream);
+    seed!("LCP_GEMINI_UPSTREAM", fc.gemini_upstream);
+}
+
+/// Print the effective configuration as TOML. Options that have a built-in
+/// default are always shown; options without one are commented out when unset.
+fn print_config(cli: &Cli) {
+    let db = cli
+        .db
+        .clone()
+        .unwrap_or_else(default_db_path)
+        .display()
+        .to_string();
+
+    println!("port = {}", cli.port);
+    println!("host = \"{}\"", cli.host);
+    println!("db = \"{}\"", db);
+    println!("ttl = {}", cli.ttl);
+    println!("timeout = {}", cli.timeout);
+
+    match &cli.anthropic_upstream {
+        Some(u) => println!("anthropic_upstream = \"{}\"", u),
+        None => println!("# anthropic_upstream = \"\""),
+    }
+    match &cli.openai_upstream {
+        Some(u) => println!("openai_upstream = \"{}\"", u),
+        None => println!("# openai_upstream = \"\""),
+    }
+    match &cli.openrouter_upstream {
+        Some(u) => println!("openrouter_upstream = \"{}\"", u),
+        None => println!("# openrouter_upstream = \"\""),
+    }
+    match &cli.gemini_upstream {
+        Some(u) => println!("gemini_upstream = \"{}\"", u),
+        None => println!("# gemini_upstream = \"\""),
+    }
+}
+
+fn default_db_path() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("lcp")
+        .join("cache.db")
+}
+
+fn main() -> Result<()> {
+    // Seed env vars from config file before the tokio runtime starts.
+    // This keeps set_var single-threaded and gives the correct precedence:
+    //   CLI flag > env var > config file > built-in default.
+    let config_path = config_path_from_args().unwrap_or_else(default_config_path);
+    seed_env_from_config_file(&config_path);
+
+    let cli = Cli::parse();
+
+    if cli.print_config {
+        print_config(&cli);
+        return Ok(());
+    }
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run(cli))
+}
+
+async fn run(cli: Cli) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("lcp=info".parse()?))
         .init();
-
-    let cli = Cli::parse();
 
     let db_path = cli.db.unwrap_or_else(default_db_path);
     if let Some(parent) = db_path.parent() {
@@ -74,7 +227,7 @@ async fn main() -> Result<()> {
         openai_upstream: cli.openai_upstream,
         openrouter_upstream: cli.openrouter_upstream,
         gemini_upstream: cli.gemini_upstream,
-        stream_channel_capacity: 32, // not yet exposed as a CLI flag
+        stream_channel_capacity: 32,
     };
 
     tracing::info!("set ANTHROPIC_BASE_URL=http://{addr}/anthropic");
@@ -83,11 +236,4 @@ async fn main() -> Result<()> {
     tracing::info!("set GEMINI_BASE_URL=http://{addr}/gemini");
 
     serve(config).await
-}
-
-fn default_db_path() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("lcp")
-        .join("cache.db")
 }

@@ -3,52 +3,72 @@
 ## Status
 Complete
 
-## Task
-Produce implementation plan for P1 behavioral correctness + P2 error path tests.
+## Tasks
+- [x] Read context.md, plan.md, and SPEC files
+- [x] Analyze hash.rs, provider.rs, proxy.rs, harness.rs
+- [x] Produce implementation plan for core architecture
 
-## Output
-Plan written to: `artifacts/plan-tests-p1-p2.md`
+## Deliverable
+- `/home/ignacio/pr/llm-cache-proxy/artifacts/plan-norm-core.md`
 
 ## Summary
-- 9 implementation steps covering 6 P1 gaps and 2 P2 gaps
-- P1 (spec invariants): routing.rs, bypass.rs, forwarding.rs, tracing.rs, model_extraction.rs extension
-- P2 (integration): timeout.rs with MockUpstream::Hang extension
-- Key decision: Extend MockUpstream with Hang variant for timeout testing
-- Key decision: Use shutdown-then-connect trick for unreachable testing
-- All steps independently committable
+Implementation plan covers:
+1. `Provider::fields_to_strip()` method (provider.rs)
+2. `cache_key(provider, method, path, body)` signature change (hash.rs)
+3. `normalize_body` internals — two-pass strip: universal + provider-specific
+4. Call site update in proxy.rs:79
+5. Inline unit test updates in hash.rs
 
-## Files Changed
-- artifacts/plan-tests-p1-p2.md (created)
+Key decisions:
+- Provider method follows `extract_model_from_path` pattern
+- `stream` stays hardcoded (universal); provider method returns attribution/routing fields only
+- Breaking API change (single call site makes this safe)
+- Existing recursive `strip_fields` handles nested `metadata` for Anthropic
 
 ## Notes
-- Steps 1, 2, 4, 5, 6, 7, 9 can execute in parallel (no dependencies)
-- P2 timeout test requires MockUpstream extension (Step 7) before Step 8
+- Harness does NOT call cache_key directly — no harness changes needed
+- Another planner covers tests/migration — not included here
 
 ---
 
-# Progress (P3 + P4 Planner)
+# Tests & Harness Plan (This Planner)
 
 ## Status
-Complete
+Planning complete
 
-## Task
-Produce implementation plan for P3 edge cases + P4 admin endpoint tests.
+## Deliverable
+- `/home/ignacio/pr/llm-cache-proxy/artifacts/plan-norm-tests.md`
 
-## Output
-Plan written to: `artifacts/plan-tests-p3-p4.md`
+## Tasks
+- [ ] Step 1: Update 6 hash.rs unit tests for new `cache_key(Provider, ...)` signature
+- [ ] Step 2: Create `tests/spec/normalization.rs` with 9 new spec invariant tests
+- [ ] Step 3: Register normalization module in `tests/spec/mod.rs`
+- [ ] Step 4: Verify harness (no changes expected)
 
-## Summary
-- 11 implementation steps covering 5 P3 edge cases and 6 P4 admin tests
-- P3 (spec invariants): compression.rs, tracing.rs (edge cases only), model_extraction.rs extension
-- P4 (spec invariants): admin.rs
-- P4 (integration): ttl.rs
-- Key decision: Extend TestHarnessBuilder with `.ttl(seconds)` method
-- Key decision: Add flate2 dev-dep for gzip compression test helpers
-- Key decision: TTL tests in integration tier (require real time passage)
+## Files to Change
+| File | Change |
+|---|---|
+| `crates/lcp-core/src/hash.rs:77-131` | Add Provider arg to all 6 unit test calls |
+| `tests/spec/normalization.rs` | New file: 9 tests for per-provider strip lists |
+| `tests/spec/mod.rs` | Add `mod normalization;` |
 
-## Files Changed
-- artifacts/plan-tests-p3-p4.md (created)
+## Key Decisions
+- Unit tests use `Provider::Anthropic` arbitrarily (mechanics are provider-agnostic)
+- Spec tests follow `model_extraction.rs` pattern (harness → HTTP → proxy → cache)
+- Harness unchanged (provider resolved from URL prefix in proxy layer)
 
-## Notes
-- No overlap with P1/P2 planner: P1 covers bypass/routing/tracing-endpoint, P3 covers trace-aggregation edge cases
-- Steps 3-9 (spec tests) can execute in parallel after Steps 1-2 (harness/dep changes)
+## Spec Test Coverage
+| Test | What it verifies |
+|---|---|
+| `test_anthropic_metadata_stripped` | `metadata` field stripped for Anthropic |
+| `test_anthropic_thinking_NOT_stripped` | `thinking` field NOT stripped |
+| `test_openai_user_stripped` | `user` field stripped for OpenAI |
+| `test_openrouter_user_stripped` | `user` field stripped for OpenRouter |
+| `test_openrouter_provider_route_stripped` | `provider`, `route` stripped |
+| `test_openrouter_transforms_NOT_stripped` | `transforms` NOT stripped |
+| `test_openrouter_reasoning_NOT_stripped` | `reasoning` NOT stripped |
+| `test_cross_provider_same_body_different_keys` | Provider included in key |
+| `test_gemini_no_body_fields_stripped` | Only `stream` stripped for Gemini |
+
+## Coordination Note
+Unit test updates (Step 1) should land in same commit as the signature change from the core plan to avoid broken intermediate state.
