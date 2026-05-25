@@ -10,7 +10,11 @@ use lcp_core::Cache;
 use lcp_server::{ServerConfig, serve};
 
 #[derive(Parser, Debug)]
-#[command(name = "lcp", about = "Local LLM API caching proxy")]
+#[command(
+    name = "lcp",
+    about = "Local HTTP proxy that caches LLM API calls. Point clients at http://127.0.0.1:9001/<provider>.",
+    long_about = "lcp is a local HTTP proxy that caches LLM API responses on disk and replays them on subsequent identical requests, eliminating redundant API spend during iterative development.\n\nPoint your LLM client at lcp instead of the real API:\n  ANTHROPIC_BASE_URL=http://127.0.0.1:9001/anthropic\n  OPENAI_BASE_URL=http://127.0.0.1:9001/openai\n  OPENROUTER_BASE_URL=http://127.0.0.1:9001/openrouter\n  GEMINI_BASE_URL=http://127.0.0.1:9001/gemini\n\nFirst call goes to the real API and is cached. Subsequent identical calls are served from disk at full speed. Send x-lcp-bypass: 1 to skip the cache for a request.\n\nTag any request with x-lcp-trace: <id> to group it into a named trace session. Retrieve the full exchange log later with GET /trace/<id>."
+)]
 struct Cli {
     /// Path to config file (TOML). Defaults to $XDG_CONFIG_HOME/lcp/config.toml.
     #[arg(long, env = "LCP_CONFIG")]
