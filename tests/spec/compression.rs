@@ -88,3 +88,41 @@ async fn test_compressed_request_body_decompressed_before_hashing() {
         "upstream must be called exactly once — HIT must be served from cache"
     );
 }
+
+#[tokio::test]
+async fn test_content_encoding_stripped_before_forwarding() {
+    // Even if the downstream sends Content-Encoding, the upstream must never
+    // receive it: lcp decompresses the body and owns the strip obligation.
+    let mock = MockUpstream::builder()
+        .sse(200, sse_response())
+        .build()
+        .await;
+    let harness = TestHarness::builder().mock(mock).build().await;
+    let client = reqwest::Client::new();
+
+    let plain_body = concat!(
+        r#"{"model":"claude-sonnet-4-20250514","#,
+        r#""max_tokens":10,"messages":[]}"#,
+    );
+    let compressed_body = gzip_compress(plain_body.as_bytes());
+
+    let resp = client
+        .post(format!("{}/anthropic/v1/messages", harness.proxy_url()))
+        .header("x-api-key", "test-key")
+        .header("content-type", "application/json")
+        .header("content-encoding", "gzip")
+        .body(compressed_body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.bytes().await.unwrap();
+
+    let reqs = harness.mock_requests();
+    assert_eq!(reqs.len(), 1);
+    let forwarded_headers = &reqs[0].headers;
+    assert!(
+        !forwarded_headers.contains_key("content-encoding"),
+        "content-encoding must not be forwarded to the upstream after decompression"
+    );
+}

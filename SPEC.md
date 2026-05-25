@@ -126,7 +126,7 @@ stats(
 
 1. Forward the request to the upstream, preserving method, path, query
    string, and all headers except `host`, `connection`, `transfer-encoding`,
-   `accept-encoding`, and `content-length` (reqwest manages these).
+   `accept-encoding`, `content-encoding`, and `content-length` (reqwest manages these).
 2. Stream each response chunk back to the client as it arrives from
    upstream; do not buffer the full response before forwarding.
 3. If the response status is `2xx`, store the exchange keyed by the cache
@@ -163,6 +163,10 @@ etc.). The proxy MUST:
 1. Strip `Accept-Encoding` before forwarding to the upstream so that
    upstream responses arrive uncompressed.
 2. Accept and decompress any compressed request body sent by the downstream
+   client before hashing and forwarding.
+3. Strip `Content-Encoding` from forwarded requests after decompression.
+   The upstream MUST always receive a plaintext body with no
+   `Content-Encoding` header, regardless of what the downstream sent.
    client before hashing and forwarding.
 3. Return responses to the downstream client uncompressed; the proxy does
    not re-apply content encoding on the response path.

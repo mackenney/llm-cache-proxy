@@ -77,7 +77,7 @@ An unrecognised `<provider>` prefix MUST return HTTP 404.
 1. Forward the request to the upstream, preserving the original method, path,
    and query string.
 2. Strip these headers before forwarding: `host`, `connection`,
-   `transfer-encoding`, `accept-encoding`, `content-length`.
+   `transfer-encoding`, `accept-encoding`, `content-encoding`, `content-length`.
 3. Stream each response chunk back to the client as it arrives; do not buffer
    the full response before forwarding.
 4. If the upstream status is `2xx`, store the exchange via `Cache::put` with

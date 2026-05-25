@@ -112,7 +112,12 @@ pub async fn handle(
         let n = name.as_str();
         if matches!(
             n,
-            "host" | "connection" | "transfer-encoding" | "accept-encoding" | "content-length"
+            "host"
+                | "connection"
+                | "transfer-encoding"
+                | "accept-encoding"
+                | "content-encoding"
+                | "content-length"
         ) {
             continue;
         }
