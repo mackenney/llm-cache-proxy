@@ -3,9 +3,9 @@ use crate::Provider;
 /// Compute the cache key for a request.
 ///
 /// The key is a BLAKE3 hex digest of the normalized request body. Normalization
-/// strips fields that carry no semantic content (e.g. `stream`) and sorts JSON
-/// keys so that logically identical requests with different field orderings
-/// produce the same key.
+/// strips transport-only fields (`stream`), provider-specific attribution and routing
+/// fields (see [`Provider::normalization_strip_fields`]), and sorts JSON keys so that
+/// logically identical requests with different field orderings produce the same key.
 ///
 /// The `method` and `path` are included so that structurally identical bodies
 /// sent to different endpoints never collide.
@@ -24,7 +24,9 @@ pub fn cache_key(provider: Provider, method: &str, path: &str, body: &[u8]) -> S
 ///
 /// - Parses as JSON; if parsing fails, returns the raw body as-is (still
 ///   produces a stable key for that exact byte sequence).
-/// - Strips semantic-free fields: `stream`.
+/// - Strips transport-only fields (all providers): `stream`.
+/// - Strips provider-specific attribution/routing fields:
+///   see [`Provider::normalization_strip_fields`].
 /// - Sorts all object keys recursively.
 fn normalize_body(provider: Provider, body: &[u8]) -> String {
     let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
@@ -131,7 +133,7 @@ mod tests {
         let body = br#"{"model":"gpt-4o","messages":[]}"#;
         assert_ne!(
             cache_key(
-                Provider::Anthropic,
+                Provider::OpenAi,
                 "POST",
                 "/openai/v1/chat/completions",
                 body
