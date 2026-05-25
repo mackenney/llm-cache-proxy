@@ -146,14 +146,15 @@ impl TestHarnessBuilder {
             stream_channel_capacity: 32,
         };
 
-        let client = Arc::new(
-            reqwest::Client::builder()
-                .no_gzip()
-                .no_deflate()
-                .no_brotli()
-                .build()
-                .expect("build reqwest client"),
-        );
+        let mut client_builder = reqwest::Client::builder()
+            .no_gzip()
+            .no_deflate()
+            .no_brotli();
+        if self.timeout_seconds > 0 {
+            client_builder =
+                client_builder.timeout(std::time::Duration::from_secs(self.timeout_seconds));
+        }
+        let client = Arc::new(client_builder.build().expect("build reqwest client"));
 
         let app_state = AppState {
             config: Arc::new(config),
