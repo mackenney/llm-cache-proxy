@@ -76,7 +76,7 @@ pub async fn handle(
         .map(str::to_owned);
 
     let full_path = format!("/{provider_str}/{path}");
-    let key = cache_key("POST", &full_path, &body);
+    let key = cache_key(provider, "POST", &full_path, &body);
 
     if !bypass {
         match state.config.cache.get(&key) {
