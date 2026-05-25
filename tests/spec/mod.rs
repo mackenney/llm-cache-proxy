@@ -12,5 +12,6 @@ mod cache_miss;
 mod compression;
 mod forwarding;
 mod model_extraction;
+mod normalization;
 mod routing;
 mod tracing;
