@@ -16,8 +16,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | Plan | What |
 |---|---|
-| [tests1](plans/tests1/PROGRESS.md) | 20+ spec invariant + integration tests: routing, bypass, forwarding, tracing, admin, model extraction, compression, timeout, TTL (12 steps, 3 waves) |
-
+| _(none)_ | |
 ---
 
 ## Completed
@@ -45,6 +44,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | Replace full-body buffering with true streaming: spawn+channel for cache miss, stream::iter for cache hit | 3ddc80e |
 | fixups1: rename RecordedRequest.path→uri, extract channel capacity, replace yield_now with deterministic drain | 83e2a19 |
 | GEMINI-1: Gemini path-based model extraction — `extract_model_from_path` + proxy wiring + spec docs + 5 spec invariant tests | fff8d01 |
+| tests1: 32 new tests (spec invariants + integration): routing, bypass, forwarding, tracing, admin, model extraction, compression, timeout, TTL; fix expired-entry miss counter gap | eab47cf |
 
 ---
 
