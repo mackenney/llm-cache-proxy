@@ -45,6 +45,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | fixups1: rename RecordedRequest.path→uri, extract channel capacity, replace yield_now with deterministic drain | 83e2a19 |
 | GEMINI-1: Gemini path-based model extraction — `extract_model_from_path` + proxy wiring + spec docs + 5 spec invariant tests | fff8d01 |
 | tests1: 32 new tests (spec invariants + integration): routing, bypass, forwarding, tracing, admin, model extraction, compression, timeout, TTL; fix expired-entry miss counter gap | eab47cf |
+| norm1: Provider-aware cache key normalization — `normalization_strip_fields`, `cache_key(provider,…)`, 9 spec invariant tests (85→94 tests) | 4b01572 |
 
 ---
 
@@ -52,4 +53,5 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | ID | Issue | Plan |
 |---|---|---|
-| _(none)_ | |
+| CLI-1 | CLI/env-var config not tested (`--port`, `LCP_PORT`, `--db`, `LCP_DB`, flag precedence over env) — requires spawning real binary; e2e tier | _(no plan)_ |
+| PROXY-1 | `Content-Encoding` header not stripped from forwarded request after body decompression — upstream may reject double-encoded requests | _(no plan)_ |
