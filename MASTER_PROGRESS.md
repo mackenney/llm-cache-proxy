@@ -54,4 +54,4 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | ID | Issue | Plan |
 |---|---|---|
 | CLI-1 | ~~CLI/env-var config not tested~~ — closed; 17 e2e tests cover flag/env/file precedence | _(done)_ |
-| PROXY-1 | `Content-Encoding` header not stripped from forwarded request after body decompression — upstream may reject double-encoded requests | _(no plan)_ |
+| PROXY-1 | ~~`Content-Encoding` not stripped after decompression~~ — closed; 1-line strip + spec update + spec invariant test | _(done)_ |
