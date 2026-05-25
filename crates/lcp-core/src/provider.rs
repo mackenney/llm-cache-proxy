@@ -51,6 +51,17 @@ impl Provider {
             _ => None,
         }
     }
+
+    /// Provider-specific request body fields to strip during cache key normalization.
+    /// Does not include `stream`, which is stripped for all providers in `hash::normalize_body`.
+    pub fn normalization_strip_fields(self) -> &'static [&'static str] {
+        match self {
+            Provider::Anthropic => &["metadata"],
+            Provider::OpenAi => &["user"],
+            Provider::OpenRouter => &["user", "provider", "route"],
+            Provider::Gemini => &[],
+        }
+    }
 }
 
 impl fmt::Display for Provider {
