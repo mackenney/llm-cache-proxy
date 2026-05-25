@@ -171,6 +171,12 @@ async fn test_delete_stats_resets_counters_not_entries() {
         .await
         .unwrap();
     assert_eq!(del_resp.status(), 200, "DELETE /stats must return 200");
+    let del_body: serde_json::Value = del_resp.json().await.unwrap();
+    assert_eq!(
+        del_body["cleared"].as_bool(),
+        Some(true),
+        "DELETE /stats must return {{\"cleared\": true}}; got: {del_body}"
+    );
 
     // Counters must be zero; entries must remain.
     let stats_after: serde_json::Value = client
@@ -241,6 +247,11 @@ async fn test_delete_cache_clears_entries_not_stats() {
         .await
         .unwrap();
     assert_eq!(del_resp.status(), 200, "DELETE /cache must return 200");
+    let del_cache_body: serde_json::Value = del_resp.json().await.unwrap();
+    assert!(
+        del_cache_body["cleared_entries"].is_number(),
+        "DELETE /cache must return {{\"cleared_entries\": N}}; got: {del_cache_body}"
+    );
 
     // Entries must be gone; stats counters must be unchanged.
     let stats_after: serde_json::Value = client

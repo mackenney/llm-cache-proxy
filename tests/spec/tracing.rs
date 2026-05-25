@@ -123,6 +123,22 @@ async fn test_trace_endpoint_full_includes_request_and_chunks() {
         entry["chunks"].is_array(),
         "full=true entry must include 'chunks' array; got: {entry}"
     );
+    assert!(
+        entry["provider"].is_string(),
+        "full=true entry must include 'provider'; got: {entry}"
+    );
+    assert!(
+        entry["content_type"].is_string(),
+        "full=true entry must include 'content_type'; got: {entry}"
+    );
+    assert!(
+        entry["req_bytes"].is_number(),
+        "full=true entry must include 'req_bytes'; got: {entry}"
+    );
+    assert!(
+        entry["resp_bytes"].is_number(),
+        "full=true entry must include 'resp_bytes'; got: {entry}"
+    );
 }
 
 #[tokio::test]

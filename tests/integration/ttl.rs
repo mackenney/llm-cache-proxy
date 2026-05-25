@@ -81,13 +81,13 @@ async fn test_ttl_nonzero_entry_expires_after_ttl() {
         "expired entry must produce a MISS; got: {cache_header2}"
     );
 
-    // Stats: only the initial MISS increments the counter.
-    // The expired-row path returns Ok(None) without calling the misses increment
-    // (it returns None before the counter logic runs).
+    // Stats: both the initial MISS and the expired-entry miss increment the counter.
+    // Per lcp-core spec, expired entries are treated as misses and the misses counter
+    // is incremented on each miss (including TTL-expired hits).
     let stats = harness.cache().stats().unwrap();
     assert_eq!(
-        stats.misses, 1,
-        "only initial MISS increments counter; expired-row path does not; got: {}",
+        stats.misses, 2,
+        "initial MISS + expired-entry MISS must both increment misses counter; got: {}",
         stats.misses
     );
 }

@@ -59,6 +59,12 @@ impl Cache {
                 if self.ttl_seconds > 0 {
                     let age = age_seconds(&created_at);
                     if age > self.ttl_seconds {
+                        // Expired entries are treated as misses per spec.
+                        conn.execute(
+                            "INSERT INTO stats(k, v) VALUES('misses', 1)
+                             ON CONFLICT(k) DO UPDATE SET v = v + 1",
+                            [],
+                        )?;
                         return Ok(None);
                     }
                 }
