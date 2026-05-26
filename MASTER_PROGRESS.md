@@ -8,7 +8,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | Item | Plan | Notes |
 |---|---|---|
-| _(none)_ | |
+| Extension pipeline: Phase 1/2/3 hooks, SensitiveState, proxy wiring | [plans/ext-1](./plans/ext-1/PROGRESS.md) | |
 
 ---
 

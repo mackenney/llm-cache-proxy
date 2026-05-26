@@ -5,6 +5,7 @@ use anyhow::Result;
 
 use lcp_core::Cache;
 
+use crate::extensions::ExtensionPipeline;
 use crate::proxy::AppState;
 use crate::router::build_router;
 
@@ -22,6 +23,8 @@ pub struct ServerConfig {
     pub gemini_upstream: Option<String>,
     /// Bounded channel capacity for streaming response chunks. Default: 32.
     pub stream_channel_capacity: usize,
+    /// Extension pipeline applied to every proxied request.
+    pub extensions: ExtensionPipeline,
 }
 
 impl ServerConfig {

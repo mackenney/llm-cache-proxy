@@ -145,6 +145,7 @@ impl TestHarnessBuilder {
             openrouter_upstream: Some(upstream.clone()),
             gemini_upstream: Some(upstream.clone()),
             stream_channel_capacity: 32,
+            extensions: lcp_server::ExtensionPipeline::new(),
         };
 
         let mut client_builder = reqwest::Client::builder()

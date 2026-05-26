@@ -191,3 +191,100 @@ are unaffected. Returns `{"cleared": true}`.
 
 Deletes all cache entries and trace entries. Stats counters are unaffected.
 Returns `{"cleared_entries": <n>}`.
+
+## Extension Pipeline
+
+The server supports an ordered, opt-in pipeline of extensions that may
+transform requests and responses as they pass through the proxy. Extensions
+are registered at startup and invoked on every proxied request. Admin
+endpoints (`/stats`, `/cache`, `/trace/…`) MUST NOT invoke any extension hook.
+
+### ProxyCtx
+
+`ProxyCtx` is a value passed to extension hooks that describes the in-flight
+request. It carries:
+- The resolved `Provider`.
+- The HTTP method.
+- The request path (after the provider prefix is stripped).
+- The cache key — present in Phase 2 and Phase 3 hooks; absent in Phase 1.
+
+`ProxyCtx` MUST be `Clone` so the pipeline runner can give each extension
+its own copy without sharing references.
+
+### SensitiveState
+
+`SensitiveState` is an immutable string-to-string map. An extension produces
+it in Phase 2 via `SensitiveStateBuilder` and receives it back in Phase 3.
+It is the only mechanism for carrying per-request extension state across the
+Phase 2 → Phase 3 boundary.
+
+**Framework guarantees — the pipeline runner MUST:**
+
+- MUST NOT inspect, iterate, log, trace, or print `SensitiveState` contents.
+  The `Debug` implementation MUST render as `SensitiveState { <redacted> }`.
+  No other representation is provided.
+- MUST NOT expose the `SensitiveState` produced by extension `i` to any
+  other extension, at any point.
+- MUST NOT persist `SensitiveState` to any storage medium.
+- MUST drop each `SensitiveState` no later than when the response stream for
+  the request that produced it is fully consumed or terminates with an error.
+- MUST guarantee the only code path that can call `get` on an extension's
+  `SensitiveState` is the Phase 3 hook of the same extension instance that
+  produced it.
+
+`SensitiveStateBuilder` is the sole construction path. Extensions call
+`set(key, value)` during Phase 2 and `build()` to seal it. After `build()`
+no mutation is possible.
+
+`SensitiveState` exposes a single read operation: `get(key) -> Option<&str>`.
+It MUST NOT provide iteration, serialization helpers, or any method that
+could assist bulk extraction of its contents.
+
+### Extension Protocol
+
+An extension is a value implementing the `Extension` contract.
+Implementors MUST be `Send + Sync + 'static`.
+
+The pipeline defines three hook points:
+
+| Hook | Phase | Fires | Input | Output |
+|---|---|---|---|---|
+| `on_request_body` | 1 | Before cache key computation | owned `ProxyCtx`, `Bytes` | `Bytes` |
+| `on_upstream_body` | 2 | After cache lookup, on miss only | owned `ProxyCtx`, `Bytes` | `Bytes` + `SensitiveStateBuilder` |
+| `on_response_stream` | 3 | After upstream responds, on miss only | owned `ProxyCtx`, `SensitiveState`, stream | stream |
+
+Default behavior for every hook is the identity transform. An extension that
+does not need a hook MUST still satisfy the contract but MAY return inputs
+unchanged.
+
+**Pipeline invariants:**
+
+- Phase 1 hooks MUST fire for every proxied request, including bypass and
+  cache-hit requests.
+- Phase 2 and Phase 3 hooks MUST NOT fire on cache hits or bypass requests.
+- The pipeline MUST run hooks in registration order.
+- Each Phase 2 hook produces a `SensitiveState` that is passed exclusively to
+  the Phase 3 hook of the same extension in the same request; states MUST NOT
+  be reordered or mixed across extensions.
+- If any Phase 2 hook returns an error, the pipeline MUST fail closed: the
+  upstream request MUST NOT be sent, and the client MUST receive a 5xx
+  response. Phase 3 hooks for that request MUST NOT fire.
+- The cache write MUST use the byte sequence produced by the Phase 3
+  transformed stream, not the raw upstream bytes.
+
+### Pipeline and Cache Interaction
+
+Phase 1 fires before the cache key is computed. Transforms applied in Phase 1
+affect the cache key and the stored request. Use Phase 1 for normalization
+transforms where logically equivalent requests should share a cache entry.
+
+Phase 2 fires after the cache key is computed, on cache misses only. The
+cache key is derived from the Phase-1-transformed body, not the
+Phase-2-transformed body. Use Phase 2 for wire-only transforms where the
+cached content should reflect the post-Phase-3 (restored) value, not the
+value sent over the wire.
+
+Phase 3 fires after the upstream responds. Its output is what the client
+receives and what is written to the cache. For a scrub/unscrub extension pair,
+Phase 3 restores the original bytes, so the cache stores originals while the
+wire carried only fakes.

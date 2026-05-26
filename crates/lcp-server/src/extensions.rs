@@ -138,11 +138,19 @@ pub trait Extension: Send + Sync + 'static {
 /// Ordered collection of [`Extension`]s run on each proxied request.
 ///
 /// An empty pipeline is a no-op. Extensions are called in registration order.
+/// `Debug` shows only the extension count — never extension internals.
+impl fmt::Debug for ExtensionPipeline {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExtensionPipeline")
+            .field("extensions", &self.extensions.len())
+            .finish()
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct ExtensionPipeline {
     extensions: Vec<Arc<dyn Extension>>,
 }
-
 impl ExtensionPipeline {
     pub fn new() -> Self {
         Self::default()

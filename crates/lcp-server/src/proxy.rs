@@ -17,6 +17,7 @@ use lcp_core::{
     types::{Exchange, RequestRecord, ResponseChunk},
 };
 
+use crate::extensions::{ProxyCtx, ResponseStream};
 use crate::server::ServerConfig;
 
 /// Adapts `mpsc::Receiver<T>` to `Stream<Item = T>` for use with `Body::from_stream()`.
@@ -76,7 +77,28 @@ pub async fn handle(
         .map(str::to_owned);
 
     let full_path = format!("/{provider_str}/{path}");
+
+    let ctx = ProxyCtx {
+        provider,
+        method: "POST".to_owned(),
+        path: path.clone(),
+        cache_key: None,
+    };
+
+    // Phase 1: transform body before cache key (fires on every proxied request).
+    let body = match state.config.extensions.run_phase1(ctx.clone(), body).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!(err = %e, "extension phase 1 error");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "extension error").into_response();
+        }
+    };
+
     let key = cache_key(provider, "POST", &full_path, &body);
+    let ctx = ProxyCtx {
+        cache_key: Some(key.clone()),
+        ..ctx
+    };
 
     if !bypass {
         match state.config.cache.get(&key) {
@@ -95,6 +117,24 @@ pub async fn handle(
         }
     }
 
+    // Phase 2: transform body for the wire (cache miss path only, not bypass).
+    let (wire_body, ext_states) = if !bypass {
+        match state
+            .config
+            .extensions
+            .run_phase2(ctx.clone(), body.clone())
+            .await
+        {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(err = %e, "extension phase 2 error");
+                return (StatusCode::BAD_GATEWAY, "extension error").into_response();
+            }
+        }
+    } else {
+        (body.clone(), Vec::new())
+    };
+
     let upstream = state.config.upstream_for(provider);
     let mut url = format!("{}/{}", upstream.trim_end_matches('/'), path);
     if !query.is_empty() {
@@ -107,7 +147,7 @@ pub async fn handle(
         url.push_str(&qs);
     }
 
-    let mut rb = state.client.post(&url).body(body.clone());
+    let mut rb = state.client.post(&url).body(wire_body);
     for (name, value) in &headers {
         let n = name.as_str();
         if matches!(
@@ -164,13 +204,29 @@ pub async fn handle(
     let content_type_clone = content_type.clone();
     let status_code = status.as_u16();
 
+    // Phase 3: wrap the upstream stream (cache miss path only, not bypass).
+    // Constructed before spawning so extension state is captured inside the stream.
+    let raw_stream: ResponseStream = Box::pin(
+        upstream_resp
+            .bytes_stream()
+            .map(|r| r.map_err(|e| std::io::Error::other(e.to_string()))),
+    );
+    let response_stream = if !bypass {
+        state
+            .config
+            .extensions
+            .run_phase3(ctx, ext_states, raw_stream)
+    } else {
+        raw_stream
+    };
+
     // Spawn task to read upstream, forward to client channel, and cache on completion.
     // Reap any already-completed tasks to prevent unbounded handle accumulation.
     {
         let mut set = state.background_writes.lock().await;
         set.spawn(async move {
             let mut chunks: Vec<ResponseChunk> = Vec::new();
-            let mut stream = upstream_resp.bytes_stream();
+            let mut stream = response_stream;
             let start = Instant::now();
 
             let stream_complete = loop {
@@ -192,8 +248,7 @@ pub async fn handle(
                     }
                     Some(Err(e)) => {
                         tracing::warn!(err = %e, chunks = chunks.len(), "upstream stream error");
-                        // Propagate error into response body so client sees an aborted stream.
-                        let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
+                        let _ = tx.send(Err(e)).await;
                         break false; // Don't cache on error
                     }
                     None => break true, // Stream completed successfully
