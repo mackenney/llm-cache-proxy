@@ -1,5 +1,10 @@
 # lcp — LLM Cache Proxy
 
+> **⚠️ Internal tool — use with caution.**
+> This project is at version 0.0.1, pre-release, and under active development.
+> APIs, CLI flags, config keys, and cache formats **may change without notice**.
+> It is not yet published to crates.io and carries no stability guarantees.
+
 A local HTTP proxy that caches LLM API responses on disk and replays them on
 subsequent identical requests. Stop paying for the same completion twice during
 iterative development.
@@ -15,7 +20,7 @@ never busts the cache.
 ## Quick start
 
 ```sh
-cargo install --path crates/lcp
+cargo install --git https://github.com/mackenney/llm-cache-proxy crates/lcp
 
 # Start the proxy (default port 9001)
 lcp

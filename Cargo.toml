@@ -8,10 +8,11 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 authors = ["Ignacio"]
 license = "MIT"
+publish = false
 
 [profile.dev]
 debug = 2
