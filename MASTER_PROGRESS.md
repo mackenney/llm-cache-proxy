@@ -8,7 +8,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | Item | Plan | Notes |
 |---|---|---|
-| Extension pipeline: Phase 1/2/3 hooks, SensitiveState, proxy wiring | [plans/ext-1](./plans/ext-1/PROGRESS.md) | |
+| _(none)_ | |
 
 ---
 
@@ -46,6 +46,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | GEMINI-1: Gemini path-based model extraction — `extract_model_from_path` + proxy wiring + spec docs + 5 spec invariant tests | fff8d01 |
 | tests1: 32 new tests (spec invariants + integration): routing, bypass, forwarding, tracing, admin, model extraction, compression, timeout, TTL; fix expired-entry miss counter gap | eab47cf |
 | norm1: Provider-aware cache key normalization — `normalization_strip_fields`, `cache_key(provider,…)`, 9 spec invariant tests (85→94 tests) | 4b01572 |
+| ext-1: Extension pipeline — Phase 1/2/3 hooks, SensitiveState opaque store, proxy wiring, 10 spec invariant tests (99→108 tests) | be99fd3 |
 
 ---
 
