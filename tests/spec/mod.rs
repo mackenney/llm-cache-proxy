@@ -10,6 +10,7 @@ mod bypass;
 mod cache_hit;
 mod cache_miss;
 mod compression;
+mod extensions;
 mod forwarding;
 mod model_extraction;
 mod normalization;

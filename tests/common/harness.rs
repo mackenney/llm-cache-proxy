@@ -87,6 +87,7 @@ pub struct TestHarnessBuilder {
     timeout_seconds: u64,
     ttl_seconds: u64,
     upstream_url: Option<String>,
+    extensions: lcp_server::ExtensionPipeline,
 }
 
 impl TestHarnessBuilder {
@@ -96,6 +97,7 @@ impl TestHarnessBuilder {
             timeout_seconds: 30,
             ttl_seconds: 0,
             upstream_url: None,
+            extensions: lcp_server::ExtensionPipeline::new(),
         }
     }
     /// Set the mock upstream server (required).
@@ -124,6 +126,12 @@ impl TestHarnessBuilder {
         self
     }
 
+    /// Set the extension pipeline (default: empty, no-op pipeline).
+    pub fn extensions(mut self, pipeline: lcp_server::ExtensionPipeline) -> Self {
+        self.extensions = pipeline;
+        self
+    }
+
     /// Build and start the test harness.
     ///
     /// # Panics
@@ -145,7 +153,7 @@ impl TestHarnessBuilder {
             openrouter_upstream: Some(upstream.clone()),
             gemini_upstream: Some(upstream.clone()),
             stream_channel_capacity: 32,
-            extensions: lcp_server::ExtensionPipeline::new(),
+            extensions: self.extensions,
         };
 
         let mut client_builder = reqwest::Client::builder()
