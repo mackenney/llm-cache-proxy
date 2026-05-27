@@ -573,6 +573,63 @@ async fn inv_ext_8_phase3_stream_is_cached() {
     );
 }
 
+// INV-EXT-9: Phase 1 fires on cache-hit requests ———————————————————————————————
+
+#[tokio::test]
+async fn inv_ext_9_phase1_fires_on_cache_hit() {
+    let mock = MockUpstream::builder()
+        .json(200, r#"{"result":"ok"}"#)
+        .build()
+        .await;
+
+    let p1_calls = Arc::new(AtomicUsize::new(0));
+    let p2_calls = Arc::new(AtomicUsize::new(0));
+    let pipeline = ExtensionPipeline::new().register(PhaseCountExt {
+        p1_calls: p1_calls.clone(),
+        p2_calls: p2_calls.clone(),
+    });
+
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(pipeline)
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+
+    // First request: MISS — both phases fire.
+    let resp1 = send_proxy_request(&client, &harness.proxy_url()).await;
+    assert_eq!(resp1.headers().get("x-lcp-cache").unwrap(), "MISS");
+    let _ = resp1.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+    assert_eq!(
+        p1_calls.load(Ordering::SeqCst),
+        1,
+        "INV-EXT-9: Phase 1 must fire on cache MISS"
+    );
+    assert_eq!(
+        p2_calls.load(Ordering::SeqCst),
+        1,
+        "INV-EXT-9: Phase 2 must fire on cache MISS"
+    );
+
+    // Second request (identical body): HIT — Phase 1 fires, Phase 2 does NOT.
+    let resp2 = send_proxy_request(&client, &harness.proxy_url()).await;
+    assert_eq!(resp2.headers().get("x-lcp-cache").unwrap(), "HIT");
+    let _ = resp2.bytes().await.unwrap();
+
+    assert_eq!(
+        p1_calls.load(Ordering::SeqCst),
+        2,
+        "INV-EXT-9: Phase 1 MUST fire on cache-hit requests"
+    );
+    assert_eq!(
+        p2_calls.load(Ordering::SeqCst),
+        1,
+        "INV-EXT-9: Phase 2 MUST NOT fire on cache-hit requests"
+    );
+}
+
 // INV-EXT-10: Extensions run in registration order ——————————————————————————
 
 struct NameExt {
