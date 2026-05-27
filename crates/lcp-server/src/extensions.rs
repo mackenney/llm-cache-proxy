@@ -43,7 +43,7 @@ impl SensitiveStateBuilder {
 /// # Framework guarantees
 ///
 /// - Contents are never logged, traced, or printed (`Debug` renders as
-///   `SensitiveState { contents: "<redacted>" }`).
+///   `SensitiveState { <redacted> }`).
 /// - Never shared across extensions; each extension receives only the state
 ///   it produced.
 /// - Never persisted to any storage medium.
@@ -63,9 +63,7 @@ impl SensitiveState {
 /// Debug MUST NOT reveal contents — part of the non-inspection guarantee.
 impl fmt::Debug for SensitiveState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SensitiveState")
-            .field("contents", &"<redacted>")
-            .finish()
+        write!(f, "SensitiveState {{ <redacted> }}")
     }
 }
 
