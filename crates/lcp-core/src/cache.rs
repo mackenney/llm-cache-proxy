@@ -40,7 +40,7 @@ impl Cache {
 
     /// Look up a cached exchange by key. Returns `None` on miss or expired entry.
     pub fn get(&self, key: &str) -> Result<Option<Exchange>> {
-        let conn = self.inner.lock().expect("cache mutex poisoned");
+        let mut conn = self.inner.lock().expect("cache mutex poisoned");
 
         let result = conn.query_row(
             "SELECT created_at, resp_bytes, exchange_json FROM entries WHERE key = ?1",
@@ -68,20 +68,22 @@ impl Cache {
                         return Ok(None);
                     }
                 }
-                conn.execute(
+                let tx = conn.transaction()?;
+                tx.execute(
                     "UPDATE entries SET hit_count = hit_count + 1 WHERE key = ?1",
                     rusqlite::params![key],
                 )?;
-                conn.execute(
+                tx.execute(
                     "INSERT INTO stats(k, v) VALUES('hits', 1)
                      ON CONFLICT(k) DO UPDATE SET v = v + 1",
                     [],
                 )?;
-                conn.execute(
+                tx.execute(
                     "INSERT INTO stats(k, v) VALUES('bytes_served_from_cache', ?1)
                      ON CONFLICT(k) DO UPDATE SET v = v + ?1",
                     rusqlite::params![resp_bytes],
                 )?;
+                tx.commit()?;
                 let exchange: Exchange =
                     serde_json::from_str(&json).context("deserializing cached exchange")?;
                 Ok(Some(exchange))
