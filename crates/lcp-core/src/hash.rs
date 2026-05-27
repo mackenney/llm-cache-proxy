@@ -57,7 +57,7 @@ fn sort_keys(value: &mut serde_json::Value) {
                     .iter_mut()
                     .map(|(k, v)| {
                         sort_keys(v);
-                        (k.clone(), v.clone())
+                        (k.clone(), std::mem::take(v))
                     })
                     .collect();
                 pairs.sort_by(|a, b| a.0.cmp(&b.0));
