@@ -226,6 +226,7 @@ pub async fn handle(
         set.spawn(async move {
             let mut chunks: Vec<ResponseChunk> = Vec::new();
             let mut stream = response_stream;
+            let mut body_is_valid_utf8 = true;
             let start = Instant::now();
 
             let stream_complete = loop {
@@ -236,7 +237,13 @@ pub async fn handle(
                             let offset_ms = start.elapsed().as_millis() as u64;
                             chunks.push(ResponseChunk {
                                 offset_ms,
-                                data: String::from_utf8_lossy(&bytes).into_owned(),
+                                data: match std::str::from_utf8(&bytes) {
+                                    Ok(s) => s.to_owned(),
+                                    Err(_) => {
+                                        body_is_valid_utf8 = false;
+                                        String::from_utf8_lossy(&bytes).into_owned()
+                                    }
+                                },
                             });
                         }
                         // Forward to client; break if client disconnected
@@ -256,7 +263,14 @@ pub async fn handle(
             drop(tx); // Signal end-of-stream to receiver
 
             // Cache write only if stream completed successfully and caching is enabled
-            if stream_complete && do_cache {
+            // Check request body UTF-8 before deciding whether to cache.
+            if do_cache && std::str::from_utf8(&body_clone).is_err() {
+                body_is_valid_utf8 = false;
+            }
+            if !body_is_valid_utf8 {
+                tracing::warn!(key = %key_clone, "skipping cache: request or response contains non-UTF8 bytes");
+            }
+            if stream_complete && do_cache && body_is_valid_utf8 {
                 let exchange = Exchange {
                     request: RequestRecord {
                         method: method_clone.clone(),
