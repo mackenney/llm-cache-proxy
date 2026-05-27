@@ -128,7 +128,7 @@ pub async fn handle(
             Ok(x) => x,
             Err(e) => {
                 tracing::error!(err = %e, "extension phase 2 error");
-                return (StatusCode::BAD_GATEWAY, "extension error").into_response();
+                return (StatusCode::INTERNAL_SERVER_ERROR, "extension error").into_response();
             }
         }
     } else {
