@@ -102,10 +102,23 @@ pub async fn handle(
     };
 
     if !bypass {
-        match state.config.cache.get(&key) {
+        let cache = state.config.cache.clone();
+        let key_for_lookup = key.clone();
+        let cached = tokio::task::spawn_blocking(move || cache.get(&key_for_lookup))
+            .await
+            .expect("spawn_blocking panicked");
+        match cached {
             Ok(Some(exchange)) => {
                 if let Some(ref tid) = trace_id {
-                    if let Err(e) = state.config.cache.record_trace(tid, &key) {
+                    let cache = state.config.cache.clone();
+                    let tid = tid.clone();
+                    let key_for_trace = key.clone();
+                    if let Err(e) = tokio::task::spawn_blocking(move || {
+                        cache.record_trace(&tid, &key_for_trace)
+                    })
+                    .await
+                    .expect("spawn_blocking panicked")
+                    {
                         tracing::warn!(err = %e, "failed to record trace on hit");
                     }
                 }
@@ -279,15 +292,28 @@ pub async fn handle(
                     content_type: content_type_clone,
                     chunks,
                 };
-                match cache.put(
-                    &key_clone,
-                    &provider_prefix,
-                    model_clone.as_deref(),
-                    &exchange,
-                ) {
+                let put_result = tokio::task::spawn_blocking({
+                    let cache = cache.clone();
+                    let key = key_clone.clone();
+                    let provider = provider_prefix.clone();
+                    let model = model_clone.clone();
+                    let ex = exchange.clone();
+                    move || cache.put(&key, &provider, model.as_deref(), &ex)
+                })
+                .await
+                .expect("spawn_blocking panicked");
+                match put_result {
                     Ok(()) => {
                         if let Some(ref tid) = trace_id_clone {
-                            if let Err(e) = cache.record_trace(tid, &key_clone) {
+                            let trace_result = tokio::task::spawn_blocking({
+                                let cache = cache.clone();
+                                let tid = tid.clone();
+                                let key = key_clone.clone();
+                                move || cache.record_trace(&tid, &key)
+                            })
+                            .await
+                            .expect("spawn_blocking panicked");
+                            if let Err(e) = trace_result {
                                 tracing::warn!(err = %e, "failed to record trace on miss");
                             }
                         }

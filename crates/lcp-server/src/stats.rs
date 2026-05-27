@@ -15,21 +15,33 @@ pub async fn health(_state: State<AppState>) -> impl IntoResponse {
 }
 
 pub async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
-    match state.config.cache.stats() {
+    let cache = state.config.cache.clone();
+    let result = tokio::task::spawn_blocking(move || cache.stats())
+        .await
+        .expect("spawn_blocking panicked");
+    match result {
         Ok(s) => Json(serde_json::to_value(s).unwrap()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
 pub async fn clear_stats(State(state): State<AppState>) -> impl IntoResponse {
-    match state.config.cache.clear_stats() {
+    let cache = state.config.cache.clone();
+    let result = tokio::task::spawn_blocking(move || cache.clear_stats())
+        .await
+        .expect("spawn_blocking panicked");
+    match result {
         Ok(()) => Json(json!({"cleared": true})).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
 pub async fn clear_cache(State(state): State<AppState>) -> impl IntoResponse {
-    match state.config.cache.clear_entries() {
+    let cache = state.config.cache.clone();
+    let result = tokio::task::spawn_blocking(move || cache.clear_entries())
+        .await
+        .expect("spawn_blocking panicked");
+    match result {
         Ok(n) => Json(json!({"cleared_entries": n})).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -39,7 +51,12 @@ pub async fn get_cache_entry(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> impl IntoResponse {
-    match state.config.cache.inspect(&key) {
+    let cache = state.config.cache.clone();
+    let key_clone = key.clone();
+    let result = tokio::task::spawn_blocking(move || cache.inspect(&key_clone))
+        .await
+        .expect("spawn_blocking panicked");
+    match result {
         Ok(Some(entry)) => Json(serde_json::to_value(&entry).unwrap()).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, format!("cache key not found: {key}")).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -58,7 +75,12 @@ pub async fn get_trace(
     Query(params): Query<TraceQuery>,
 ) -> impl IntoResponse {
     if params.full {
-        match state.config.cache.inspect_trace(&trace_id) {
+        let cache = state.config.cache.clone();
+        let tid = trace_id.clone();
+        let result = tokio::task::spawn_blocking(move || cache.inspect_trace(&tid))
+            .await
+            .expect("spawn_blocking panicked");
+        match result {
             Ok(entries) => {
                 let items: Vec<_> = entries
                     .iter()
@@ -69,7 +91,12 @@ pub async fn get_trace(
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         }
     } else {
-        match state.config.cache.get_trace(&trace_id) {
+        let cache = state.config.cache.clone();
+        let tid = trace_id.clone();
+        let result = tokio::task::spawn_blocking(move || cache.get_trace(&tid))
+            .await
+            .expect("spawn_blocking panicked");
+        match result {
             Ok(entries) => {
                 let items: Vec<_> = entries
                     .iter()

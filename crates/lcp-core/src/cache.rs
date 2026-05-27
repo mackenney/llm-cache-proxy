@@ -40,7 +40,7 @@ impl Cache {
 
     /// Look up a cached exchange by key. Returns `None` on miss or expired entry.
     pub fn get(&self, key: &str) -> Result<Option<Exchange>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.inner.lock().expect("cache mutex poisoned");
 
         let result = conn.query_row(
             "SELECT created_at, resp_bytes, exchange_json FROM entries WHERE key = ?1",
@@ -106,7 +106,7 @@ impl Cache {
         model: Option<&str>,
         exchange: &Exchange,
     ) -> Result<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.inner.lock().expect("cache mutex poisoned");
         let now = iso_now();
         let exchange_json = serde_json::to_string(exchange)?;
         let resp_bytes: usize = exchange.chunks.iter().map(|c| c.data.len()).sum();
@@ -132,7 +132,7 @@ impl Cache {
 
     /// Persist a (trace_id, cache_key) association.
     pub fn record_trace(&self, trace_id: &str, cache_key: &str) -> Result<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.inner.lock().expect("cache mutex poisoned");
         conn.execute(
             "INSERT OR IGNORE INTO trace_entries(trace_id, cache_key) VALUES (?1, ?2)",
             rusqlite::params![trace_id, cache_key],
@@ -142,7 +142,7 @@ impl Cache {
 
     /// Return all cache entries associated with a trace, ordered by created_at.
     pub fn get_trace(&self, trace_id: &str) -> Result<Vec<CacheEntry>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.inner.lock().expect("cache mutex poisoned");
         let mut stmt = conn.prepare(
             "SELECT e.key, e.created_at, e.provider, e.model, e.status,
                     e.hit_count, e.req_bytes, e.resp_bytes
@@ -170,7 +170,7 @@ impl Cache {
 
     /// Return aggregate statistics.
     pub fn stats(&self) -> Result<CacheStats> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.inner.lock().expect("cache mutex poisoned");
         let stat_rows: Vec<(String, i64)> = {
             let mut stmt = conn.prepare("SELECT k, v FROM stats")?;
             stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -200,7 +200,7 @@ impl Cache {
 
     /// Delete all cache and trace entries.
     pub fn clear_entries(&self) -> Result<i64> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.inner.lock().expect("cache mutex poisoned");
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM entries", [], |r| r.get(0))?;
         conn.execute("DELETE FROM trace_entries", [])?;
         conn.execute("DELETE FROM entries", [])?;
@@ -209,13 +209,13 @@ impl Cache {
 
     /// Reset all stat counters.
     pub fn clear_stats(&self) -> Result<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.inner.lock().expect("cache mutex poisoned");
         conn.execute("DELETE FROM stats", [])?;
         Ok(())
     }
 
     pub fn list_entries(&self) -> Result<Vec<CacheEntry>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.inner.lock().expect("cache mutex poisoned");
         let mut stmt = conn.prepare(
             "SELECT key, created_at, provider, model, status, hit_count, req_bytes, resp_bytes
              FROM entries ORDER BY created_at DESC",
@@ -240,7 +240,7 @@ impl Cache {
     /// Fetch the full exchange for a key without incrementing any counter.
     /// Returns `None` if the key does not exist.
     pub fn inspect(&self, key: &str) -> Result<Option<FullEntry>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.inner.lock().expect("cache mutex poisoned");
         let result = conn.query_row(
             "SELECT created_at, provider, model, status, content_type, \
              hit_count, req_bytes, resp_bytes, exchange_json \
@@ -296,7 +296,7 @@ impl Cache {
     /// Fetch full entries for all keys in a trace, ordered by `created_at`.
     /// No counters are modified.
     pub fn inspect_trace(&self, trace_id: &str) -> Result<Vec<FullEntry>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.inner.lock().expect("cache mutex poisoned");
         let mut stmt = conn.prepare(
             "SELECT e.key, e.created_at, e.provider, e.model, e.status, e.content_type, \
              e.hit_count, e.req_bytes, e.resp_bytes, e.exchange_json \
