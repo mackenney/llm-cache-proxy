@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{OriginalUri, Path, State};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
@@ -59,7 +59,7 @@ pub async fn handle(
     State(state): State<AppState>,
     method: Method,
     Path((provider_str, path)): Path<(String, String)>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    original_uri: OriginalUri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -138,14 +138,9 @@ pub async fn handle(
 
     let upstream = state.config.upstream_for(provider);
     let mut url = format!("{}/{}", upstream.trim_end_matches('/'), path);
-    if !query.is_empty() {
-        let qs = query
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
-            .collect::<Vec<_>>()
-            .join("&");
+    if let Some(query) = original_uri.query() {
         url.push('?');
-        url.push_str(&qs);
+        url.push_str(query);
     }
 
     let mut rb = state.client.request(method.clone(), &url).body(wire_body);
