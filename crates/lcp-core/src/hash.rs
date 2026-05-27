@@ -20,6 +20,42 @@ pub fn cache_key(provider: Provider, method: &str, path: &str, body: &[u8]) -> S
     hasher.finalize().to_hex().to_string()
 }
 
+/// Compute cache key and extract model in a single JSON parse.
+///
+/// Returns `(cache_key, Option<model>)`. Parses the body once, extracting the
+/// `"model"` field before normalization strips it, then normalizes and hashes.
+pub fn cache_key_and_model(
+    provider: Provider,
+    method: &str,
+    path: &str,
+    body: &[u8],
+) -> (String, Option<String>) {
+    let parsed = serde_json::from_slice::<serde_json::Value>(body).ok();
+    let model = parsed
+        .as_ref()
+        .and_then(|v| v.get("model"))
+        .and_then(|m| m.as_str())
+        .map(str::to_owned);
+    let normalized = match parsed {
+        Some(mut value) => {
+            strip_fields(&mut value, &["stream"]);
+            strip_fields(&mut value, provider.normalization_strip_fields());
+            sort_keys(&mut value);
+            serde_json::to_string(&value)
+                .unwrap_or_else(|_| String::from_utf8_lossy(body).into_owned())
+        }
+        None => String::from_utf8_lossy(body).into_owned(),
+    };
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(method.as_bytes());
+    hasher.update(b"|");
+    hasher.update(path.as_bytes());
+    hasher.update(b"|");
+    hasher.update(normalized.as_bytes());
+    let key = hasher.finalize().to_hex().to_string();
+    (key, model)
+}
+
 /// Normalize a JSON request body for stable hashing.
 ///
 /// - Parses as JSON; if parsing fails, returns the raw body as-is (still
@@ -148,5 +184,35 @@ mod tests {
         let k1 = cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", body);
         let k2 = cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", body);
         assert_eq!(k1, k2);
+    }
+}
+
+#[cfg(test)]
+mod cache_key_and_model_tests {
+    use super::*;
+    use crate::Provider;
+
+    #[test]
+    fn cache_key_and_model_extracts_both() {
+        let body = br#"{"model":"claude-opus-4","messages":[]}"#;
+        let (key, model) =
+            cache_key_and_model(Provider::Anthropic, "POST", "/anthropic/v1/messages", body);
+        assert_eq!(
+            key,
+            cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", body),
+        );
+        assert_eq!(model, Some("claude-opus-4".to_owned()));
+    }
+
+    #[test]
+    fn cache_key_and_model_no_model_field() {
+        let body = br#"{"messages":[]}"#;
+        let (key, model) =
+            cache_key_and_model(Provider::Anthropic, "POST", "/anthropic/v1/messages", body);
+        assert_eq!(
+            key,
+            cache_key(Provider::Anthropic, "POST", "/anthropic/v1/messages", body),
+        );
+        assert_eq!(model, None);
     }
 }

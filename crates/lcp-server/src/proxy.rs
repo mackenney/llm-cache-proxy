@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
 
 use lcp_core::{
-    Provider, cache_key,
+    Provider, cache_key_and_model,
     types::{Exchange, RequestRecord, ResponseChunk},
 };
 
@@ -95,7 +95,7 @@ pub async fn handle(
         }
     };
 
-    let key = cache_key(provider, method.as_str(), &full_path, &body);
+    let (key, model_from_body) = cache_key_and_model(provider, method.as_str(), &full_path, &body);
     let ctx = ProxyCtx {
         cache_key: Some(key.clone()),
         ..ctx
@@ -181,9 +181,7 @@ pub async fn handle(
         .to_owned();
     let is_sse = content_type.contains("text/event-stream");
 
-    let model = provider
-        .extract_model_from_path(&path)
-        .or_else(|| extract_model(&body));
+    let model = provider.extract_model_from_path(&path).or(model_from_body);
     let do_cache = !bypass && status.is_success();
 
     // Create channel for streaming response to client
@@ -344,10 +342,4 @@ fn serve_cached(exchange: Exchange, key: &str) -> Response {
         .header("x-lcp-key", &key[..12])
         .body(body)
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
-}
-
-fn extract_model(body: &[u8]) -> Option<String> {
-    serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(str::to_owned))
 }
