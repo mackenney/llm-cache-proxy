@@ -159,17 +159,17 @@ pub async fn handle(
     let mut rb = state.client.request(method.clone(), &url).body(wire_body);
     for (name, value) in &headers {
         let n = name.as_str();
-        if matches!(
-            n,
-            "host"
-                | "connection"
-                | "transfer-encoding"
-                | "accept-encoding"
-                | "content-encoding"
-                | "content-length"
-                | "x-lcp-bypass"
-                | "x-lcp-trace"
-        ) {
+        if n.starts_with("x-lcp-")
+            || matches!(
+                n,
+                "host"
+                    | "connection"
+                    | "transfer-encoding"
+                    | "accept-encoding"
+                    | "content-encoding"
+                    | "content-length"
+            )
+        {
             continue;
         }
         if let Ok(v) = value.to_str() {
@@ -237,7 +237,9 @@ pub async fn handle(
         set.spawn(async move {
             let mut chunks: Vec<ResponseChunk> = Vec::new();
             let mut stream = response_stream;
-            let mut body_is_valid_utf8 = true;
+            // Accumulate raw response bytes to validate UTF-8 after the full stream.
+            // Per-chunk checks fail on valid multibyte sequences split across chunk boundaries.
+            let mut response_buf: Vec<u8> = Vec::new();
             let start = Instant::now();
 
             let stream_complete = loop {
@@ -246,15 +248,10 @@ pub async fn handle(
                         // Only accumulate for cache write; skip string conversion when not caching.
                         if do_cache {
                             let offset_ms = start.elapsed().as_millis() as u64;
+                            response_buf.extend_from_slice(&bytes);
                             chunks.push(ResponseChunk {
                                 offset_ms,
-                                data: match std::str::from_utf8(&bytes) {
-                                    Ok(s) => s.to_owned(),
-                                    Err(_) => {
-                                        body_is_valid_utf8 = false;
-                                        String::from_utf8_lossy(&bytes).into_owned()
-                                    }
-                                },
+                                data: String::from_utf8_lossy(&bytes).into_owned(),
                             });
                         }
                         // Forward to client; break if client disconnected
@@ -271,20 +268,25 @@ pub async fn handle(
                     None => break true, // Stream completed successfully
                 }
             };
-            drop(tx); // Signal end-of-stream to receiver
+            drop(stream); // Drop stream here to satisfy SensitiveState lifetime guarantee.
+            drop(tx); // Signal end-of-stream to receiver.
 
-            // Cache write only if stream completed successfully and caching is enabled
-            // Check request body UTF-8 before deciding whether to cache.
-            if do_cache && std::str::from_utf8(&body_clone).is_err() {
-                body_is_valid_utf8 = false;
+            // Skip caching if response or request body contains non-UTF8 bytes.
+            // Validate after full stream accumulation so multibyte sequences split across
+            // chunk boundaries are handled correctly.
+            let response_is_valid_utf8 = std::str::from_utf8(&response_buf).is_ok();
+            let request_is_valid_utf8 = std::str::from_utf8(&body_clone).is_ok();
+            if do_cache && (!response_is_valid_utf8 || !request_is_valid_utf8) {
+                if !response_is_valid_utf8 {
+                    tracing::warn!(key = %key_clone, "skipping cache: response stream contains non-UTF8 bytes");
+                } else {
+                    tracing::warn!(key = %key_clone, "skipping cache: request body contains non-UTF8 bytes");
+                }
             }
-            if !body_is_valid_utf8 {
-                tracing::warn!(key = %key_clone, "skipping cache: request or response contains non-UTF8 bytes");
-            }
-            if stream_complete && do_cache && body_is_valid_utf8 {
+            if stream_complete && do_cache && response_is_valid_utf8 && request_is_valid_utf8 {
                 let exchange = Exchange {
                     request: RequestRecord {
-                        method: method_clone.clone(),
+                        method: method_clone,
                         path: full_path_clone,
                         body: String::from_utf8_lossy(&body_clone).into_owned(),
                     },
@@ -297,8 +299,7 @@ pub async fn handle(
                     let key = key_clone.clone();
                     let provider = provider_prefix.clone();
                     let model = model_clone.clone();
-                    let ex = exchange.clone();
-                    move || cache.put(&key, &provider, model.as_deref(), &ex)
+                    move || cache.put(&key, &provider, model.as_deref(), &exchange)
                 })
                 .await
                 .expect("spawn_blocking panicked");

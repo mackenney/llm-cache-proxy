@@ -202,6 +202,13 @@ impl ExtensionPipeline {
         states: Vec<SensitiveState>,
         mut stream: ResponseStream,
     ) -> ResponseStream {
+        debug_assert_eq!(
+            self.extensions.len(),
+            states.len(),
+            "run_phase3: states/extensions length mismatch (got {} states for {} extensions)",
+            states.len(),
+            self.extensions.len(),
+        );
         for (ext, state) in self.extensions.iter().zip(states) {
             stream = ext.on_response_stream(ctx.clone(), state, stream);
         }

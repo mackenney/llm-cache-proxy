@@ -30,22 +30,10 @@ pub fn cache_key_and_model(
     path: &str,
     body: &[u8],
 ) -> (String, Option<String>) {
-    let parsed = serde_json::from_slice::<serde_json::Value>(body).ok();
-    let model = parsed
-        .as_ref()
-        .and_then(|v| v.get("model"))
-        .and_then(|m| m.as_str())
-        .map(str::to_owned);
-    let normalized = match parsed {
-        Some(mut value) => {
-            strip_fields(&mut value, &["stream"]);
-            strip_fields(&mut value, provider.normalization_strip_fields());
-            sort_keys(&mut value);
-            serde_json::to_string(&value)
-                .unwrap_or_else(|_| String::from_utf8_lossy(body).into_owned())
-        }
-        None => String::from_utf8_lossy(body).into_owned(),
-    };
+    let model = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("model").and_then(|m| m.as_str()).map(str::to_owned));
+    let normalized = normalize_body(provider, body);
     let mut hasher = blake3::Hasher::new();
     hasher.update(method.as_bytes());
     hasher.update(b"|");
@@ -64,7 +52,7 @@ pub fn cache_key_and_model(
 /// - Strips provider-specific attribution/routing fields:
 ///   see [`Provider::normalization_strip_fields`].
 /// - Sorts all object keys recursively.
-fn normalize_body(provider: Provider, body: &[u8]) -> String {
+pub(crate) fn normalize_body(provider: Provider, body: &[u8]) -> String {
     let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
         return String::from_utf8_lossy(body).into_owned();
     };

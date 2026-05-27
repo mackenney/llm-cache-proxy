@@ -20,7 +20,13 @@ pub async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
         .await
         .expect("spawn_blocking panicked");
     match result {
-        Ok(s) => Json(serde_json::to_value(s).unwrap()).into_response(),
+        Ok(s) => match serde_json::to_value(s) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => {
+                tracing::error!(err = %e, "failed to serialize stats");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        },
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -57,7 +63,13 @@ pub async fn get_cache_entry(
         .await
         .expect("spawn_blocking panicked");
     match result {
-        Ok(Some(entry)) => Json(serde_json::to_value(&entry).unwrap()).into_response(),
+        Ok(Some(entry)) => match serde_json::to_value(&entry) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => {
+                tracing::error!(err = %e, "failed to serialize cache entry");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        },
         Ok(None) => (StatusCode::NOT_FOUND, format!("cache key not found: {key}")).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -84,7 +96,7 @@ pub async fn get_trace(
             Ok(entries) => {
                 let items: Vec<_> = entries
                     .iter()
-                    .map(|e| serde_json::to_value(e).unwrap())
+                    .map(|e| serde_json::to_value(e).expect("FullEntry serializes"))
                     .collect();
                 Json(json!({"trace_id": trace_id, "entries": items})).into_response()
             }

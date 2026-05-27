@@ -617,7 +617,10 @@ async fn inv_ext_9_phase1_fires_on_cache_hit() {
     let resp2 = send_proxy_request(&client, &harness.proxy_url()).await;
     assert_eq!(resp2.headers().get("x-lcp-cache").unwrap(), "HIT");
     let _ = resp2.bytes().await.unwrap();
-
+    // Phase 1 fires synchronously before the cache lookup, so p1_calls is already
+    // incremented by the time the response returns. wait_for_writes is still called
+    // for consistency with the MISS block above.
+    harness.wait_for_writes().await;
     assert_eq!(
         p1_calls.load(Ordering::SeqCst),
         2,
