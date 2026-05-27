@@ -7,4 +7,4 @@ pub mod stats;
 pub use extensions::{
     Extension, ExtensionPipeline, ProxyCtx, ResponseStream, SensitiveState, SensitiveStateBuilder,
 };
-pub use server::{ServerConfig, serve};
+pub use server::{ServerConfig, build_upstream_client, serve};

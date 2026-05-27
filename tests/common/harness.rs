@@ -156,15 +156,7 @@ impl TestHarnessBuilder {
             extensions: self.extensions,
         };
 
-        let mut client_builder = reqwest::Client::builder()
-            .no_gzip()
-            .no_deflate()
-            .no_brotli();
-        if self.timeout_seconds > 0 {
-            client_builder =
-                client_builder.timeout(std::time::Duration::from_secs(self.timeout_seconds));
-        }
-        let client = Arc::new(client_builder.build().expect("build reqwest client"));
+        let client = Arc::new(lcp_server::build_upstream_client(self.timeout_seconds));
 
         let app_state = AppState {
             config: Arc::new(config),

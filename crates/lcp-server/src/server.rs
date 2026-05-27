@@ -50,11 +50,10 @@ impl ServerConfig {
     }
 }
 
-/// Start the proxy and block until the server terminates.
-pub async fn serve(config: ServerConfig) -> Result<()> {
-    let addr = config.addr;
-    let timeout_seconds = config.timeout_seconds;
-
+/// Build an HTTP client for upstream requests.
+///
+/// Compression negotiation is disabled so upstreams return plain SSE.
+pub fn build_upstream_client(timeout_seconds: u64) -> reqwest::Client {
     let mut cb = reqwest::Client::builder()
         // Never negotiate compression — upstreams must return plain SSE.
         .no_gzip()
@@ -63,7 +62,15 @@ pub async fn serve(config: ServerConfig) -> Result<()> {
     if timeout_seconds > 0 {
         cb = cb.timeout(std::time::Duration::from_secs(timeout_seconds));
     }
-    let client = Arc::new(cb.build()?);
+    cb.build().expect("build reqwest Client")
+}
+
+/// Start the proxy and block until the server terminates.
+pub async fn serve(config: ServerConfig) -> Result<()> {
+    let addr = config.addr;
+    let timeout_seconds = config.timeout_seconds;
+
+    let client = Arc::new(build_upstream_client(timeout_seconds));
 
     let state = AppState {
         config: Arc::new(config),
