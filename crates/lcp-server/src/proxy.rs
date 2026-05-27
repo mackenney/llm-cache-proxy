@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
@@ -57,6 +57,7 @@ impl AppState {
 
 pub async fn handle(
     State(state): State<AppState>,
+    method: Method,
     Path((provider_str, path)): Path<(String, String)>,
     Query(query): Query<std::collections::HashMap<String, String>>,
     headers: HeaderMap,
@@ -80,7 +81,7 @@ pub async fn handle(
 
     let ctx = ProxyCtx {
         provider,
-        method: "POST".to_owned(),
+        method: method.to_string(),
         path: path.clone(),
         cache_key: None,
     };
@@ -94,7 +95,7 @@ pub async fn handle(
         }
     };
 
-    let key = cache_key(provider, "POST", &full_path, &body);
+    let key = cache_key(provider, method.as_str(), &full_path, &body);
     let ctx = ProxyCtx {
         cache_key: Some(key.clone()),
         ..ctx
@@ -147,7 +148,7 @@ pub async fn handle(
         url.push_str(&qs);
     }
 
-    let mut rb = state.client.post(&url).body(wire_body);
+    let mut rb = state.client.request(method.clone(), &url).body(wire_body);
     for (name, value) in &headers {
         let n = name.as_str();
         if matches!(
@@ -205,6 +206,7 @@ pub async fn handle(
     let model_clone = model.clone();
     let content_type_clone = content_type.clone();
     let status_code = status.as_u16();
+    let method_clone = method.to_string();
 
     // Phase 3: wrap the upstream stream (cache miss path only, not bypass).
     // Constructed before spawning so extension state is captured inside the stream.
@@ -262,7 +264,7 @@ pub async fn handle(
             if stream_complete && do_cache {
                 let exchange = Exchange {
                     request: RequestRecord {
-                        method: "POST".into(),
+                        method: method_clone.clone(),
                         path: full_path_clone,
                         body: String::from_utf8_lossy(&body_clone).into_owned(),
                     },
