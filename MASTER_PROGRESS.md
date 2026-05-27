@@ -9,7 +9,6 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | Item | Plan | Notes |
 |---|---|---|
 | _(none)_ | |
-
 ---
 
 ## Queued
@@ -47,6 +46,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | tests1: 32 new tests (spec invariants + integration): routing, bypass, forwarding, tracing, admin, model extraction, compression, timeout, TTL; fix expired-entry miss counter gap | eab47cf |
 | norm1: Provider-aware cache key normalization — `normalization_strip_fields`, `cache_key(provider,…)`, 9 spec invariant tests (85→94 tests) | 4b01572 |
 | ext-1: Extension pipeline — Phase 1/2/3 hooks, SensitiveState opaque store, proxy wiring, 10 spec invariant tests (99→108 tests) | be99fd3 |
+| cr1: code review fixes — 3 BLOCKERs, 3 IMPORTANTs, 3 perf, 3 maintenance (108→111 tests) | f93fd81 |
 
 ---
 
