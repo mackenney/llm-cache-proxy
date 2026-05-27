@@ -158,6 +158,8 @@ pub async fn handle(
                 | "accept-encoding"
                 | "content-encoding"
                 | "content-length"
+                | "x-lcp-bypass"
+                | "x-lcp-trace"
         ) {
             continue;
         }
