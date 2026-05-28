@@ -45,7 +45,7 @@ async request handlers.
 | `GET` | `/stats` | Aggregate stats |
 | `DELETE` | `/stats` | Reset stats counters |
 | `DELETE` | `/cache` | Purge all cache entries |
-| `GET` | `/cache/<key>` | Fetch full exchange by cache key; 404 if not found |
+| `GET` | `/cache/<key>` | Fetch full exchange by cache key. `<key>` MUST be the full BLAKE3 hex digest — the 12-char `x-lcp-key` response header is an observability prefix only and is not accepted here. Returns 404 if not found. |
 | `GET` | `/trace/<trace-id>` | Trace lookup (metadata) |
 | `GET` | `/trace/<trace-id>?full=true` | Trace lookup with full request/response data |
 | `POST`, `GET` | `/<provider>/<*path>` | Proxy handler |
@@ -83,8 +83,11 @@ An unrecognised `<provider>` prefix MUST return HTTP 404.
 4. If the upstream status is `2xx`, store the exchange via `Cache::put` with
    the provider, extracted `model`, and all received chunks.
 5. Include response headers: `x-lcp-cache: MISS`,
-   `x-lcp-key: <first-12-chars-of-key>`.
-6. Non-`2xx` responses MUST be forwarded as-is and MUST NOT be stored.
+   `x-lcp-key: <first-12-chars-of-key>`. These headers are added for
+   **all** upstream responses, including non-`2xx`.
+6. Non-`2xx` responses MUST NOT be stored. They are forwarded to the
+   client with the `x-lcp-cache: MISS` and `x-lcp-key` headers above,
+   and the `misses` counter is incremented.
 
 ### Model Extraction
 

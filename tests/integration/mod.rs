@@ -5,5 +5,6 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod scrub;
 mod timeout;
 mod ttl;

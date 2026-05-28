@@ -20,9 +20,10 @@ replay.
 
 - **System-wide transparent interception** (TLS MITM, `/etc/hosts` redirect,
   iptables redirect) — clients must point at lcp explicitly via an env var.
-- **Plugin execution** — no request/response interceptor plugins run at
-  runtime in v1. The architecture exposes insertion points designed to
-  accommodate a future extension layer without structural changes.
+- **Arbitrary plugin execution** — no third-party interceptor plugins are loaded
+  at runtime. The built-in scrub extension is the only extension that runs;
+  the architecture exposes insertion points for future additions without
+  structural changes.
 - **Authentication / multi-user isolation** — lcp is a single-user local
   tool; it has no auth and MUST NOT be exposed on a public interface.
 - **TLS termination** — lcp speaks plain HTTP; clients set
@@ -134,8 +135,10 @@ stats(
    ordered response chunks with arrival timestamps (`offset_ms` since first
    chunk), and request metadata.
 4. The response MUST include `x-lcp-cache: MISS` and
-   `x-lcp-key: <first-12-chars-of-key>`.
-5. The `stats` table MUST be updated: increment `misses` by 1.
+   `x-lcp-key: <first-12-chars-of-key>`. These headers are added for
+   **all** upstream responses, including non-`2xx`.
+5. The `stats` table MUST be updated: increment `misses` by 1. This
+   applies to all upstream responses, including non-`2xx`.
 
 ### Cache hit
 
@@ -232,7 +235,7 @@ With `?full=true`, each entry also includes `provider`, `model`, `content_type`,
 | `GET` | `/stats` | Hit/miss counts, bytes served, total entries, by-model entry counts. |
 | `DELETE` | `/stats` | Reset the `stats` table counters to zero. Per-entry `hit_count` values and cache entries are unaffected. |
 | `DELETE` | `/cache` | Delete all cache entries and trace entries. The `stats` table counters are unaffected. |
-| `GET` | `/cache/<key>` | Fetch the full exchange (request + response chunks) for a given cache key. Returns 404 if not found. |
+| `GET` | `/cache/<key>` | Fetch the full exchange (request + response chunks) for a given cache key. `<key>` MUST be the full BLAKE3 hex digest — the 12-char `x-lcp-key` response header is an observability prefix only and is not accepted here. Returns 404 if not found. |
 
 ### `/cache/<key>` response shape
 
@@ -315,6 +318,35 @@ lcp reads a TOML config file on startup:
 | `--gemini-upstream` | `LCP_GEMINI_UPSTREAM` | see table above | Gemini upstream |
 | `--print-config` | _(none)_ | _(flag)_ | Print effective config as TOML and exit |
 
+Path values (`--db`, `patterns_file`) support `~` expansion: a leading `~` is
+replaced with the user's home directory.
+
+### Extension configuration
+
+Extension options are set in the config TOML under `[extensions]` — they have
+no CLI flag or env var equivalent.
+
+#### `[extensions.scrub]`
+
+Enables the built-in scrub/unscrub extension (backed by `its-classified`).
+
+| Key | Default | Description |
+|---|---|---|
+| `patterns_file` | _(unset)_ | Path to an `its-classified` TOML patterns file. `~` is expanded. |
+
+Behaviour when the section is present:
+- `patterns_file` absent → warning at startup, scrubbing disabled.
+- `patterns_file` set, file missing or invalid → warning at startup, scrubbing disabled.
+- `patterns_file` set, file valid → scrub extension loaded; all patterns in the file are active.
+
+Create a patterns file: `its-classified init <path>`.
+Register Tier 2 secrets: `its-classified register --patterns <path>`.
+
+Example:
+```toml
+[extensions.scrub]
+patterns_file = "~/.config/lcp/patterns.toml"
+```
 ## Extension Architecture
 
 lcp is structured so that a future interceptor layer can be added without
@@ -324,7 +356,8 @@ rewriting the proxy pipeline. Intended insertion points:
 - Before response storage: response filtering, enrichment.
 - After cache lookup: audit logging, cache decoration.
 
-No extension code runs in v1.
+The scrub/unscrub extension is the only built-in extension and is opt-in
+via `[extensions.scrub]` in the config file.
 
 ## Per-Component Specs
 

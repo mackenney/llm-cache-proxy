@@ -18,6 +18,7 @@ tracing = { workspace = true }
 flate2 = "1"
 assert_cmd = "2"
 tempfile = "3"
+its-classified = { workspace = true }
 
 [features]
 default = []

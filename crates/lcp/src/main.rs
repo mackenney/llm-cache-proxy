@@ -7,7 +7,7 @@ use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
 
 use lcp_core::Cache;
-use lcp_server::{ServerConfig, serve};
+use lcp_server::{ExtensionPipeline, ScrubExt, ServerConfig, serve};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -74,6 +74,27 @@ struct FileConfig {
     openai_upstream: Option<String>,
     openrouter_upstream: Option<String>,
     gemini_upstream: Option<String>,
+    extensions: Option<ExtensionsConfig>,
+}
+
+/// Per-extension configuration block under `[extensions]`.
+#[derive(Deserialize, Default)]
+struct ExtensionsConfig {
+    scrub: Option<ScrubConfig>,
+}
+
+/// Configuration for the built-in scrub/unscrub extension.
+///
+/// ```toml
+/// [extensions.scrub]
+/// patterns_file = "~/.config/lcp/patterns.toml"
+/// ```
+///
+/// Create a patterns file with `its-classified init <path>`.
+/// Register Tier 2 secrets with `its-classified register --patterns <path>`.
+#[derive(Deserialize, Default)]
+struct ScrubConfig {
+    patterns_file: Option<String>,
 }
 
 /// Scan argv for `--config <path>` or `--config=<path>` without a full parse.
@@ -105,13 +126,15 @@ fn default_config_path() -> PathBuf {
         .join("config.toml")
 }
 
-/// Read the config file and pre-seed any `LCP_*` env vars that are not already
-/// set. This runs before the tokio runtime so it is safe to call `set_var`.
-/// Precedence after seeding: CLI flag > env var (real or seeded) > built-in default.
-fn seed_env_from_config_file(path: &Path) {
+/// Read the config file, pre-seed any `LCP_*` env vars that are not already
+/// set, and return the parsed config for callers that need it.
+///
+/// Returns `None` if the file is missing (silently) or malformed (with a
+/// warning). Precedence after seeding: CLI flag > env var > config file > default.
+fn seed_env_from_config_file(path: &Path) -> Option<FileConfig> {
     let contents = match std::fs::read_to_string(path) {
         Ok(s) => s,
-        Err(_) => return, // missing file is silently ignored
+        Err(_) => return None, // missing file is silently ignored
     };
     let fc: FileConfig = match toml::from_str(&contents) {
         Ok(v) => v,
@@ -120,7 +143,7 @@ fn seed_env_from_config_file(path: &Path) {
                 "lcp: warning: ignoring malformed config file {}: {e}",
                 path.display()
             );
-            return;
+            return None;
         }
     };
 
@@ -137,22 +160,39 @@ fn seed_env_from_config_file(path: &Path) {
     }
 
     seed!("LCP_PORT", fc.port);
-    seed!("LCP_HOST", fc.host);
-    seed!("LCP_DB", fc.db);
+    seed!("LCP_HOST", fc.host.as_deref());
+    seed!("LCP_DB", fc.db.as_deref());
     seed!("LCP_TTL", fc.ttl);
     seed!("LCP_TIMEOUT", fc.timeout);
-    seed!("LCP_ANTHROPIC_UPSTREAM", fc.anthropic_upstream);
-    seed!("LCP_OPENAI_UPSTREAM", fc.openai_upstream);
-    seed!("LCP_OPENROUTER_UPSTREAM", fc.openrouter_upstream);
-    seed!("LCP_GEMINI_UPSTREAM", fc.gemini_upstream);
+    seed!("LCP_ANTHROPIC_UPSTREAM", fc.anthropic_upstream.as_deref());
+    seed!("LCP_OPENAI_UPSTREAM", fc.openai_upstream.as_deref());
+    seed!("LCP_OPENROUTER_UPSTREAM", fc.openrouter_upstream.as_deref());
+    seed!("LCP_GEMINI_UPSTREAM", fc.gemini_upstream.as_deref());
+
+    Some(fc)
 }
 
-/// Print the effective configuration as TOML. Options that have a built-in
-/// default are always shown; options without one are commented out when unset.
-fn print_config(cli: &Cli) {
+/// Expand a leading `~` to the user's home directory.
+/// `~/foo` → `/home/user/foo`; `~` alone → `/home/user`; no `~` → unchanged.
+fn expand_tilde(s: &str) -> PathBuf {
+    if s == "~" {
+        return dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+    }
+    if let Some(rest) = s.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(s)
+}
+
+/// Print the effective configuration as TOML. Options with built-in defaults
+/// are always shown; optional options are commented out when unset.
+fn print_config(cli: &Cli, ext: Option<&ExtensionsConfig>) {
     let db = cli
         .db
-        .clone()
+        .as_deref()
+        .map(|p| expand_tilde(&p.to_string_lossy()))
         .unwrap_or_else(default_db_path)
         .display()
         .to_string();
@@ -179,6 +219,21 @@ fn print_config(cli: &Cli) {
         Some(u) => println!("gemini_upstream = \"{}\"", u),
         None => println!("# gemini_upstream = \"\""),
     }
+
+    println!();
+    match ext
+        .and_then(|e| e.scrub.as_ref())
+        .and_then(|s| s.patterns_file.as_deref())
+    {
+        Some(p) => {
+            println!("[extensions.scrub]");
+            println!("patterns_file = \"{}\"", p);
+        }
+        None => {
+            println!("# [extensions.scrub]");
+            println!("# patterns_file = \"\"  # run: its-classified init <path>");
+        }
+    }
 }
 
 fn default_db_path() -> PathBuf {
@@ -188,38 +243,93 @@ fn default_db_path() -> PathBuf {
         .join("cache.db")
 }
 
+/// Build the extension pipeline from the `[extensions]` section of the config.
+///
+/// - `[extensions.scrub]` absent → empty pipeline (no scrubbing).
+/// - `[extensions.scrub]` present, no `patterns_file` → warning with setup instructions.
+/// - `patterns_file` set, file missing or invalid → warning, no scrubbing.
+/// - `patterns_file` set, file valid → `ScrubExt` registered.
+fn build_extension_pipeline(ext: Option<&ExtensionsConfig>) -> ExtensionPipeline {
+    let Some(ext) = ext else {
+        return ExtensionPipeline::new();
+    };
+
+    let Some(scrub_cfg) = &ext.scrub else {
+        return ExtensionPipeline::new();
+    };
+
+    let Some(raw_path) = &scrub_cfg.patterns_file else {
+        tracing::warn!(
+            "[extensions.scrub] is configured but `patterns_file` is not set; \
+             scrubbing is disabled. \
+             Add `patterns_file = \"~/.config/lcp/patterns.toml\"` to [extensions.scrub], \
+             then run `its-classified init <path>` to create the file."
+        );
+        return ExtensionPipeline::new();
+    };
+
+    let path = expand_tilde(raw_path);
+
+    match ScrubExt::from_patterns_file(&path) {
+        Ok(scrub) => {
+            tracing::info!(path = %path.display(), "scrub extension loaded");
+            ExtensionPipeline::new().register(scrub)
+        }
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                "scrub patterns file could not be loaded; scrubbing is disabled. \
+                 Run `its-classified init {}` to create it, then restart lcp. Error: {e}",
+                path.display(),
+            );
+            ExtensionPipeline::new()
+        }
+    }
+}
+
 fn main() -> Result<()> {
     // Seed env vars from config file before the tokio runtime starts.
     // This keeps set_var single-threaded and gives the correct precedence:
     //   CLI flag > env var > config file > built-in default.
     let config_path = config_path_from_args().unwrap_or_else(default_config_path);
-    seed_env_from_config_file(&config_path);
+    let file_config = seed_env_from_config_file(&config_path);
 
     let cli = Cli::parse();
 
     if cli.print_config {
-        print_config(&cli);
+        print_config(
+            &cli,
+            file_config.as_ref().and_then(|fc| fc.extensions.as_ref()),
+        );
         return Ok(());
     }
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(run(cli))
+        .block_on(run(cli, file_config))
 }
 
-async fn run(cli: Cli) -> Result<()> {
+async fn run(cli: Cli, file_config: Option<FileConfig>) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("lcp=info".parse()?))
         .init();
 
-    let db_path = cli.db.unwrap_or_else(default_db_path);
+    let db_path = cli
+        .db
+        .as_deref()
+        .map(|p| expand_tilde(&p.to_string_lossy()))
+        .unwrap_or_else(default_db_path);
+
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
     let cache = Cache::open(&db_path, cli.ttl)?;
     tracing::info!(path = %db_path.display(), "cache database opened");
+
+    let extensions =
+        build_extension_pipeline(file_config.as_ref().and_then(|fc| fc.extensions.as_ref()));
 
     let addr: SocketAddr = format!("{}:{}", cli.host, cli.port).parse()?;
 
@@ -232,7 +342,7 @@ async fn run(cli: Cli) -> Result<()> {
         openrouter_upstream: cli.openrouter_upstream,
         gemini_upstream: cli.gemini_upstream,
         stream_channel_capacity: 32,
-        extensions: lcp_server::ExtensionPipeline::new(),
+        extensions,
     };
 
     tracing::info!("set ANTHROPIC_BASE_URL=http://{addr}/anthropic");
