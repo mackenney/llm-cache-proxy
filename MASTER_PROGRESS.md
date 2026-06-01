@@ -14,7 +14,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | Plan | What |
 |---|---|
-| _(future)_ | **System-prompt content normalization** — pattern-driven stripping of volatile lines (e.g. `Current date: …`, `Current working directory: …`) from system prompt content before cache key derivation. Patterns configured in `[extensions.system_prompt_scrub]` as a list of regexes applied to the system message body (Anthropic top-level `system` field or first `role:system` message). Key-only: forwarded payload is unchanged, so the model still receives real values. Motivation: agentic harnesses like pi inject the current date and CWD into every system prompt, busting the cache on every new day and every new project path. Pattern-driven design keeps lcp agnostic to any specific harness. |
+| _(future)_ | **System-prompt cache-key normalization** — exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, `Current working directory: …`) from the cache key so the same logical prompt gets the same key across days and directories. **The forwarded request is never modified** — the provider always sees the real values. Only the bytes fed into BLAKE3 are affected. Configured via `[extensions.system_prompt_scrub]` as a list of regexes matched against the system message body (Anthropic top-level `system` field or first `role:system` message). Motivation: without this, every new day or working directory busts the entire cache even when the prompt logic is identical. |
 ## Completed
 
 ### Foundation
