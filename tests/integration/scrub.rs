@@ -891,7 +891,7 @@ async fn unscrub_restores_secret_from_gemini_sse_stream() {
     let client = reqwest::Client::new();
 
     let body = format!(
-        r#"{{"contents\":[{{\"parts\":[{{\"text\":\"key={}\"}}]}}]}}"#,
+        r#"{{"contents":[{{"parts":[{{"text":"key={}"}}]}}]}}"#,
         String::from_utf8_lossy(GCP)
     );
 

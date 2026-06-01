@@ -24,7 +24,7 @@ use crate::extensions::ResponseStream;
 /// The heuristic: SSE streams from all supported providers begin with `data: `.
 /// Non-SSE JSON responses begin with `{`. No content-type header access is needed.
 pub fn is_sse_first_chunk(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"data: ") || bytes.starts_with(b"data:{")
+    bytes.starts_with(b"data: ")
 }
 
 /// Returns the provider-specific text field from a parsed SSE event JSON, if present.
@@ -290,7 +290,8 @@ async fn unscrub_sse(
 
     // Step 1: Split into frames. SSE frames are separated by "\n\n".
     // Include the "\n\n" terminator in each frame for round-trip fidelity.
-    let raw_str = String::from_utf8_lossy(&raw);
+    let raw_str = String::from_utf8(raw)
+        .map_err(|e| io::Error::other(format!("SSE response contained non-UTF8 bytes: {e}")))?;
     // Normalize \r\n → \n before splitting so both line-ending styles are handled.
     // The WHATWG EventSource spec permits \r, \n, or \r\n line endings; providers
     // that use \r\n\r\n frame separators would otherwise produce no split boundaries.
