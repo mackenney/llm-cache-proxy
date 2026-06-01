@@ -1,4 +1,4 @@
-//! SSE-aware unscrubbing helpers for `ScrubExt`.
+//! SSE-aware restore helpers for `DoppelExt`.
 //!
 //! These functions are the building blocks for semantic-level secret
 //! restoration in `text/event-stream` responses, where raw-byte Aho-Corasick
@@ -12,8 +12,8 @@ use std::task::{Context, Poll};
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, Stream, StreamExt};
-use its_classified::types::{Entry, SessionKey};
-use its_classified::unscrub_stream;
+use doppel::{Entry, SessionKey};
+use doppel::restore_stream;
 use lcp_core::Provider;
 use serde_json::Value;
 
@@ -97,18 +97,18 @@ pub fn set_text_field(json: &mut Value, provider: Provider, text: String) -> boo
 }
 
 /// Response stream wrapper that auto-detects SSE and applies the correct
-/// unscrubbing strategy.
+/// restore strategy.
 ///
 /// For SSE (`text/event-stream`): buffers all frames, accumulates provider text
-/// fields, runs `unscrub_stream` on the concatenated text, redistributes the
+/// fields, runs `restore_stream` on the concatenated text, redistributes the
 /// restored text back into the original SSE frames, then drains the queue.
 ///
-/// For non-SSE: buffers all bytes, runs `unscrub_stream` on the full buffer,
+/// For non-SSE: buffers all bytes, runs `restore_stream` on the full buffer,
 /// then drains.
 ///
 /// Trade-off: complete buffering is required because a fake may span any number
 /// of SSE events and its boundaries are unknown until the stream ends.
-pub struct SseUnscrubStream {
+pub struct SseRestoreStream {
     state: SseState,
 }
 
@@ -130,8 +130,8 @@ enum SseState {
     Done,
 }
 
-impl SseUnscrubStream {
-    /// Wrap `stream` in SSE-aware unscrubbing. `provider` is used to locate the
+impl SseRestoreStream {
+    /// Wrap `stream` in SSE-aware restoring. `provider` is used to locate the
     /// text field in SSE events.
     pub fn new(
         stream: ResponseStream,
@@ -152,7 +152,7 @@ impl SseUnscrubStream {
     }
 }
 
-impl Stream for SseUnscrubStream {
+impl Stream for SseRestoreStream {
     type Item = Result<Bytes, io::Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -256,12 +256,12 @@ async fn process_buffer(
     }
     if !is_sse {
         // Non-SSE: run unscrub_stream on the raw bytes as a single-chunk in-memory stream.
-        return unscrub_non_sse(raw, entries, session_key).await;
+        return restore_non_sse(raw, entries, session_key).await;
     }
-    unscrub_sse(raw, entries, session_key, provider).await
+    restore_sse(raw, entries, session_key, provider).await
 }
 
-async fn unscrub_non_sse(
+async fn restore_non_sse(
     raw: Vec<u8>,
     entries: Vec<Entry>,
     session_key: SessionKey,
@@ -271,7 +271,7 @@ async fn unscrub_non_sse(
     let stream: ResponseStream = Box::pin(stream::once(async move {
         Ok::<Bytes, io::Error>(Bytes::from(raw))
     }));
-    let us = unscrub_stream(stream, entries, session_key)
+    let us = restore_stream(stream, entries, session_key)
         .map_err(|e| io::Error::other(e.to_string()))?;
     let mut queue = VecDeque::new();
     futures_util::pin_mut!(us);
@@ -282,7 +282,7 @@ async fn unscrub_non_sse(
     Ok(queue)
 }
 
-async fn unscrub_sse(
+async fn restore_sse(
     raw: Vec<u8>,
     entries: Vec<Entry>,
     session_key: SessionKey,
@@ -362,7 +362,7 @@ async fn unscrub_sse(
         Box::pin(stream::once(
             async move { Ok::<Bytes, io::Error>(text_bytes) },
         ));
-    let us = unscrub_stream(text_stream, entries, session_key)
+    let us = restore_stream(text_stream, entries, session_key)
         .map_err(|e| io::Error::other(e.to_string()))?;
     futures_util::pin_mut!(us);
     let mut restored_bytes: Vec<u8> = Vec::new();
@@ -453,7 +453,7 @@ mod tests {
     fn is_sse_detection_skips_empty_first_chunk() {
         // Regression: an empty leading chunk must not latch is_sse to false.
         // The detection should wait for a non-empty chunk.
-        // This test documents the intent; the actual guard is in SseUnscrubStream::poll_next.
+        // This test documents the intent; the actual guard is in SseRestoreStream::poll_next.
         assert!(!is_sse_first_chunk(b""));
         assert!(is_sse_first_chunk(b"data: "));
         assert!(is_sse_first_chunk(b"event: "));
@@ -548,16 +548,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sse_unscrub_stream_passthrough_no_secrets() {
+    async fn sse_restore_stream_passthrough_no_secrets() {
         // SSE stream with no fakes — output bytes must equal input bytes.
         use futures_util::stream;
         let input = b"data: {\"type\":\"message_start\"}\n\ndata: {\"type\":\"message_stop\"}\n\n";
         let stream: ResponseStream = Box::pin(stream::once(async move {
             Ok::<Bytes, io::Error>(Bytes::from_static(input))
         }));
-        // Use empty entries + dummy session key → no unscrubbing applied.
+        // Use empty entries + dummy session key → no restoring applied.
         let session_key = SessionKey::from_bytes([0u8; 32]);
-        let us = SseUnscrubStream::new(stream, vec![], session_key, Provider::Anthropic);
+        let us = SseRestoreStream::new(stream, vec![], session_key, Provider::Anthropic);
         let out: Vec<Bytes> = futures_util::StreamExt::collect::<Vec<_>>(us)
             .await
             .into_iter()
@@ -575,7 +575,7 @@ mod tests {
             Ok::<Bytes, io::Error>(Bytes::from_static(input))
         }));
         let session_key = SessionKey::from_bytes([0u8; 32]);
-        let us = SseUnscrubStream::new(stream, vec![], session_key, Provider::OpenAi);
+        let us = SseRestoreStream::new(stream, vec![], session_key, Provider::OpenAi);
         let out: Vec<u8> = futures_util::StreamExt::collect::<Vec<_>>(us)
             .await
             .into_iter()
@@ -590,7 +590,7 @@ mod tests {
         use futures_util::stream;
         let stream: ResponseStream = Box::pin(stream::empty());
         let session_key = SessionKey::from_bytes([0u8; 32]);
-        let us = SseUnscrubStream::new(stream, vec![], session_key, Provider::Gemini);
+        let us = SseRestoreStream::new(stream, vec![], session_key, Provider::Gemini);
         let out: Vec<_> = futures_util::StreamExt::collect::<Vec<_>>(us).await;
         assert!(out.is_empty());
     }
@@ -610,7 +610,7 @@ mod tests {
             Ok::<Bytes, io::Error>(Bytes::from(input.as_bytes().to_vec()))
         }));
         let session_key = SessionKey::from_bytes([0u8; 32]);
-        let us = SseUnscrubStream::new(stream, vec![], session_key, Provider::Anthropic);
+        let us = SseRestoreStream::new(stream, vec![], session_key, Provider::Anthropic);
         let out: Vec<u8> = futures_util::StreamExt::collect::<Vec<_>>(us)
             .await
             .into_iter()

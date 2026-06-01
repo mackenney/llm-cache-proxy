@@ -1,4 +1,4 @@
-pub mod scrub;
-pub mod sse_unscrub;
+pub mod doppel;
+pub mod sse_restore;
 
-pub use scrub::{ScrubExt, ScrubExtLoadError};
+pub use doppel::{DoppelExt, DoppelExtLoadError};

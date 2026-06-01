@@ -1,20 +1,20 @@
-//! ScrubExt — Phase 2/3 secret-scrubbing extension backed by `its-classified`.
+//! DoppelExt — Phase 2/3 secret-swapping extension backed by `doppel`.
 //!
 //! Registered [`Pattern`]s (Tier 1 structural or Tier 2 registered) are applied
 //! to the request body in Phase 2 before it reaches the upstream.  Detected
 //! secrets are replaced with structurally-equivalent fakes; the originals are
-//! restored in Phase 3 via `UnscrubStream` before the response is written to
+//! restored in Phase 3 via `RestoreStream` before the response is written to
 //! cache and returned to the client.
 //!
 //! # Phase interactions (per lcp-server SPEC §Pipeline and Cache Interaction)
 //!
 //! - **Phase 1 (not used):** identity — cache key includes the original body, so
 //!   each unique secret combination gets its own cache entry.
-//! - **Phase 2:** `its_classified::scrub` replaces secrets with fakes.  The
+//! - **Phase 2:** `doppel::swap` replaces secrets with fakes.  The
 //!   `Entry` set and session key are placed in `SensitiveState` for Phase 3.
-//! - **Phase 3:** For SSE responses, `SseUnscrubStream` performs semantic-level
-//!   unscrubbing (accumulate text across events, unscrub, redistribute). For
-//!   non-SSE responses, `its_classified::unscrub_stream` performs raw-byte
+//! - **Phase 3:** For SSE responses, `SseRestoreStream` performs semantic-level
+//!   unswapping (accumulate text across events, unscrub, redistribute). For
+//!   non-SSE responses, `doppel::restore_stream` performs raw-byte
 //!   Aho-Corasick restoration. The cache stores restored content; the wire
 //!   carried only fakes.
 //!
@@ -32,69 +32,69 @@ use std::io;
 
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
-use its_classified::scrub;
-use its_classified::types::{Entry, Pattern, SessionKey};
+use doppel::swap;
+use doppel::{Entry, Pattern, SessionKey};
 
 use crate::extensions::{
     Extension, ProxyCtx, ResponseStream, SensitiveState, SensitiveStateBuilder,
 };
 
-use crate::ext::sse_unscrub::SseUnscrubStream;
+use crate::ext::sse_restore::SseRestoreStream;
 
 /// Extension that scrubs detected secrets from request bodies before they are
 /// forwarded to the upstream, and restores them in the response stream.
 ///
 /// Construct with one or more [`Pattern`]s (Tier 1 built-ins from
-/// [`its_classified::tier1::patterns`] or Tier 2 via [`its_classified::register`]).
+/// [`doppel::patterns`] or Tier 2 via [`doppel::register`]).
 ///
 /// # Example
 ///
 /// ```ignore
-/// use its_classified::{register, tier1::patterns};
-/// use lcp_server::ScrubExt;
+/// use doppel::{register, patterns};
+/// use lcp_server::DoppelExt;
 ///
 /// let pipeline = ExtensionPipeline::new().register(
-///     ScrubExt::new(vec![
+///     DoppelExt::new(vec![
 ///         patterns::anthropic(),
 ///         patterns::openai_project(),
 ///         register(b"my-internal-token-long-enough").unwrap(),
 ///     ])
 /// );
 /// ```
-/// Error returned by [`ScrubExt::from_patterns_file`].
+/// Error returned by [`DoppelExt::from_secrets_file`].
 #[derive(Debug, thiserror::Error)]
-pub enum ScrubExtLoadError {
+pub enum DoppelExtLoadError {
     #[error("cannot read patterns file: {0}")]
     Io(#[from] std::io::Error),
     #[error("invalid patterns file: {0}")]
-    Patterns(#[from] its_classified::PatternsFileError),
+    Patterns(#[from] doppel::SecretsFileError),
 }
 
-pub struct ScrubExt {
+pub struct DoppelExt {
     patterns: Vec<Pattern>,
 }
 
-impl ScrubExt {
-    /// Load a `ScrubExt` from a patterns file on disk.
+impl DoppelExt {
+    /// Load a `DoppelExt` from a patterns file on disk.
     ///
-    /// Reads the TOML file, deserializes it via `PatternsFile::deserialize`, and
+    /// Reads the TOML file, deserializes it via `SecretsFile::deserialize`, and
     /// calls `into_patterns()` to build the full pattern set.
-    pub fn from_patterns_file(path: &std::path::Path) -> Result<Self, ScrubExtLoadError> {
+    pub fn from_secrets_file(path: &std::path::Path) -> Result<Self, DoppelExtLoadError> {
         let bytes = std::fs::read(path)?;
-        let pf = its_classified::PatternsFile::deserialize(&bytes)?;
+        let pf = doppel::SecretsFile::deserialize(&bytes)?;
         let patterns = pf.into_patterns()?;
         Ok(Self::new(patterns))
     }
 
-    /// Create a `ScrubExt` from an explicit list of patterns.
+    /// Create a `DoppelExt` from an explicit list of patterns.
     pub fn new(patterns: Vec<Pattern>) -> Self {
         Self { patterns }
     }
 }
 
-impl Extension for ScrubExt {
+impl Extension for DoppelExt {
     fn name(&self) -> &'static str {
-        "scrub"
+        "doppel"
     }
 
     /// Phase 2: scrub the request body, store encrypted entries and the session
@@ -106,7 +106,7 @@ impl Extension for ScrubExt {
     ) -> BoxFuture<'static, Result<(Bytes, SensitiveStateBuilder), anyhow::Error>> {
         let patterns = self.patterns.clone();
         Box::pin(async move {
-            let result = scrub(&body, &patterns)?;
+            let result = swap(&body, &patterns)?;
 
             if result.entries.is_empty() {
                 // No secrets detected — pass body through unchanged with empty state.
@@ -127,7 +127,7 @@ impl Extension for ScrubExt {
         })
     }
 
-    /// Phase 3: wrap the response stream in `UnscrubStream` to restore originals.
+    /// Phase 3: wrap the response stream in `RestoreStream` to restore originals.
     fn on_response_stream(
         &self,
         ctx: ProxyCtx,
@@ -158,7 +158,7 @@ impl Extension for ScrubExt {
         };
         let session_key = SessionKey::from_bytes(key_bytes);
 
-        Box::pin(SseUnscrubStream::new(
+        Box::pin(SseRestoreStream::new(
             stream,
             entries,
             session_key,
@@ -178,7 +178,7 @@ fn error_stream(msg: String) -> ResponseStream {
 mod tests {
     use super::*;
     use futures_util::StreamExt;
-    use its_classified::tier1::patterns;
+    use doppel::patterns;
 
     // Synthetic test secrets matching Tier 1 structural patterns.
     // These are NOT real credentials.
@@ -195,8 +195,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn phase2_scrubs_tier1_anthropic_key() {
-        let ext = ScrubExt::new(vec![patterns::anthropic()]);
+    async fn phase2_swaps_tier1_anthropic_key() {
+        let ext = DoppelExt::new(vec![patterns::anthropic()]);
         let body = Bytes::from([b"key: ".as_slice(), ANT].concat());
         let (scrubbed, builder) = ext.on_upstream_body(ctx(), body.clone()).await.unwrap();
         let state = builder.build();
@@ -217,7 +217,7 @@ mod tests {
 
     #[tokio::test]
     async fn phase2_no_secret_in_body_returns_unchanged() {
-        let ext = ScrubExt::new(vec![patterns::anthropic()]);
+        let ext = DoppelExt::new(vec![patterns::anthropic()]);
         let body = Bytes::from(r#"{"model":"claude-3-5-sonnet-20241022","max_tokens":5}"#);
         let (out, builder) = ext.on_upstream_body(ctx(), body.clone()).await.unwrap();
         let state = builder.build();
@@ -236,7 +236,7 @@ mod tests {
     async fn phase3_restores_secret_in_response() {
         use futures_util::stream;
 
-        let ext = ScrubExt::new(vec![patterns::anthropic()]);
+        let ext = DoppelExt::new(vec![patterns::anthropic()]);
         let body = Bytes::from([b"key: ".as_slice(), ANT].concat());
         let (scrubbed, builder) = ext.on_upstream_body(ctx(), body.clone()).await.unwrap();
         let state = builder.build();
@@ -266,7 +266,7 @@ mod tests {
     async fn phase3_empty_state_passes_stream_unchanged() {
         use futures_util::stream;
 
-        let ext = ScrubExt::new(vec![patterns::anthropic()]);
+        let ext = DoppelExt::new(vec![patterns::anthropic()]);
         // No secrets in body → empty SensitiveState.
         let body = Bytes::from(b"plain body".as_slice());
         let (_, builder) = ext.on_upstream_body(ctx(), body).await.unwrap();
@@ -284,8 +284,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn phase2_scrubs_openai_classic_key() {
-        let ext = ScrubExt::new(vec![patterns::openai_classic()]);
+    async fn phase2_swaps_openai_classic_key() {
+        let ext = DoppelExt::new(vec![patterns::openai_classic()]);
         let body = Bytes::from([b"Authorization: Bearer ".as_slice(), OPENAI].concat());
         let (scrubbed, builder) = ext.on_upstream_body(ctx(), body.clone()).await.unwrap();
         let state = builder.build();
