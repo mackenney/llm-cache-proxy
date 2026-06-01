@@ -235,7 +235,7 @@ pub async fn handle(
     {
         let mut set = state.background_writes.lock().await;
         set.spawn(async move {
-            let mut chunks: Vec<ResponseChunk> = Vec::new();
+            let mut chunks_raw: Vec<(u64, Bytes)> = Vec::new();
             let mut stream = response_stream;
             // Accumulate raw response bytes to validate UTF-8 after the full stream.
             // Per-chunk checks fail on valid multibyte sequences split across chunk boundaries.
@@ -249,10 +249,7 @@ pub async fn handle(
                         if do_cache {
                             let offset_ms = start.elapsed().as_millis() as u64;
                             response_buf.extend_from_slice(&bytes);
-                            chunks.push(ResponseChunk {
-                                offset_ms,
-                                data: String::from_utf8_lossy(&bytes).into_owned(),
-                            });
+                            chunks_raw.push((offset_ms, bytes.clone()));
                         }
                         // Forward to client; break if client disconnected
                         if tx.send(Ok(bytes)).await.is_err() {
@@ -261,7 +258,7 @@ pub async fn handle(
                         }
                     }
                     Some(Err(e)) => {
-                        tracing::warn!(err = %e, chunks = chunks.len(), "upstream stream error");
+                        tracing::warn!(err = %e, chunks = chunks_raw.len(), "upstream stream error");
                         let _ = tx.send(Err(e)).await;
                         break false; // Don't cache on error
                     }
@@ -284,6 +281,30 @@ pub async fn handle(
                 }
             }
             if stream_complete && do_cache && response_is_valid_utf8 && request_is_valid_utf8 {
+                let chunks: Vec<ResponseChunk> = {
+                    let mut carry: Vec<u8> = Vec::new();
+                    chunks_raw
+                        .into_iter()
+                        .map(|(offset_ms, raw)| {
+                            let mut buf = std::mem::take(&mut carry);
+                            buf.extend_from_slice(&raw);
+                            match std::str::from_utf8(&buf) {
+                                Ok(s) => ResponseChunk {
+                                    offset_ms,
+                                    data: s.to_owned(),
+                                },
+                                Err(e) => {
+                                    let valid_up_to = e.valid_up_to();
+                                    let data = std::str::from_utf8(&buf[..valid_up_to])
+                                        .expect("valid_up_to is a char boundary")
+                                        .to_owned();
+                                    carry = buf[valid_up_to..].to_vec();
+                                    ResponseChunk { offset_ms, data }
+                                }
+                            }
+                        })
+                        .collect()
+                };
                 let exchange = Exchange {
                     request: RequestRecord {
                         method: method_clone,

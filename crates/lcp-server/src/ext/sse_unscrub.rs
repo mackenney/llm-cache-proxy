@@ -168,7 +168,7 @@ impl Stream for SseUnscrubStream {
                 } => {
                     match inner.as_mut().poll_next(cx) {
                         Poll::Ready(Some(Ok(chunk))) => {
-                            if is_sse.is_none() {
+                            if is_sse.is_none() && !chunk.is_empty() {
                                 is_sse = Some(is_sse_first_chunk(&chunk));
                             }
                             raw_buf.extend_from_slice(&chunk);
@@ -369,7 +369,7 @@ async fn unscrub_sse(
     while let Some(chunk) = us.next().await {
         restored_bytes.extend_from_slice(&chunk.map_err(|e| io::Error::other(e.to_string()))?);
     }
-    let restored_text = String::from_utf8(restored_bytes)
+    let mut restored_text = String::from_utf8(restored_bytes)
         .map_err(|e| io::Error::other(format!("unscrub_stream produced non-UTF8 bytes: {e}")))?;
 
     // Step 6: Redistribute restored text. Strategy: first text event gets all
@@ -389,7 +389,7 @@ async fn unscrub_sse(
         };
         let new_text = if !first_text_done {
             first_text_done = true;
-            restored_text.clone()
+            std::mem::take(&mut restored_text)
         } else {
             String::new()
         };
@@ -405,7 +405,7 @@ async fn unscrub_sse(
         let prefix_lines: String = frame
             .raw
             .lines()
-            .filter(|l| !l.starts_with("data:"))
+            .filter(|l| !l.starts_with("data:") && !l.is_empty())
             .map(|l| format!("{l}\n"))
             .collect();
         let reconstructed = format!(
@@ -447,6 +447,16 @@ mod tests {
     #[test]
     fn is_sse_rejects_empty() {
         assert!(!is_sse_first_chunk(b""));
+    }
+
+    #[test]
+    fn is_sse_detection_skips_empty_first_chunk() {
+        // Regression: an empty leading chunk must not latch is_sse to false.
+        // The detection should wait for a non-empty chunk.
+        // This test documents the intent; the actual guard is in SseUnscrubStream::poll_next.
+        assert!(!is_sse_first_chunk(b""));
+        assert!(is_sse_first_chunk(b"data: "));
+        assert!(is_sse_first_chunk(b"event: "));
     }
 
     #[test]
