@@ -10,10 +10,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
+use doppel::restore_stream;
+use doppel::{Entry, SessionKey};
 use futures_util::future::BoxFuture;
 use futures_util::{FutureExt, Stream, StreamExt};
-use doppel::{Entry, SessionKey};
-use doppel::restore_stream;
 use lcp_core::Provider;
 use serde_json::Value;
 

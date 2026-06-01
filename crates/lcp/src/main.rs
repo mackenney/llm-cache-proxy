@@ -7,7 +7,7 @@ use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
 
 use lcp_core::Cache;
-use lcp_server::{ExtensionPipeline, DoppelExt, ServerConfig, serve};
+use lcp_server::{DoppelExt, ExtensionPipeline, ServerConfig, serve};
 
 #[derive(Parser, Debug)]
 #[command(
