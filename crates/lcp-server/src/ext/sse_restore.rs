@@ -255,7 +255,7 @@ async fn process_buffer(
         return Ok(VecDeque::new());
     }
     if !is_sse {
-        // Non-SSE: run unscrub_stream on the raw bytes as a single-chunk in-memory stream.
+        // Non-SSE: run restore_stream on the raw bytes as a single-chunk in-memory stream.
         return restore_non_sse(raw, entries, session_key).await;
     }
     restore_sse(raw, entries, session_key, provider).await
@@ -347,7 +347,7 @@ async fn restore_sse(
         }
     }
 
-    // Step 4 & 5: If no text events, nothing to unscrub — pass frames through.
+    // Step 4 & 5: If no text events, nothing to restore — pass frames through.
     if text_buf.is_empty() {
         let mut queue = VecDeque::new();
         for f in parsed {
@@ -356,7 +356,7 @@ async fn restore_sse(
         return Ok(queue);
     }
 
-    // Run unscrub_stream on the concatenated text buffer.
+    // Run restore_stream on the concatenated text buffer.
     let text_bytes = Bytes::from(text_buf.as_bytes().to_vec());
     let text_stream: ResponseStream =
         Box::pin(stream::once(
@@ -370,7 +370,7 @@ async fn restore_sse(
         restored_bytes.extend_from_slice(&chunk.map_err(|e| io::Error::other(e.to_string()))?);
     }
     let mut restored_text = String::from_utf8(restored_bytes)
-        .map_err(|e| io::Error::other(format!("unscrub_stream produced non-UTF8 bytes: {e}")))?;
+        .map_err(|e| io::Error::other(format!("restore_stream produced non-UTF8 bytes: {e}")))?;
 
     // Step 6: Redistribute restored text. Strategy: first text event gets all
     // restored text; subsequent text events get empty string.

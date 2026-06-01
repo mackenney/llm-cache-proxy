@@ -13,7 +13,7 @@
 //! - **Phase 2:** `doppel::swap` replaces secrets with fakes.  The
 //!   `Entry` set and session key are placed in `SensitiveState` for Phase 3.
 //! - **Phase 3:** For SSE responses, `SseRestoreStream` performs semantic-level
-//!   unswapping (accumulate text across events, unscrub, redistribute). For
+//!   unswapping (accumulate text across events, restore, redistribute). For
 //!   non-SSE responses, `doppel::restore_stream` performs raw-byte
 //!   Aho-Corasick restoration. The cache stores restored content; the wire
 //!   carried only fakes.
@@ -97,7 +97,7 @@ impl Extension for DoppelExt {
         "doppel"
     }
 
-    /// Phase 2: scrub the request body, store encrypted entries and the session
+    /// Phase 2: swap the request body, store encrypted entries and the session
     /// key in `SensitiveStateBuilder` so Phase 3 can restore them.
     fn on_upstream_body(
         &self,
@@ -249,7 +249,7 @@ mod tests {
         let restored_stream = ext.on_response_stream(ctx(), state, raw_stream);
         let chunks: Vec<_> = restored_stream.collect().await;
 
-        // unscrub_stream emits the prefix ("key: ") and the restored secret as
+        // restore_stream emits the prefix ("key: ") and the restored secret as
         // separate chunks; concatenate all to check the full restored output.
         let all_bytes: Vec<u8> = chunks
             .iter()

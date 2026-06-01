@@ -290,22 +290,22 @@ cached content should reflect the post-Phase-3 (restored) value, not the
 value sent over the wire.
 
 Phase 3 fires after the upstream responds. Its output is what the client
-receives and what is written to the cache. For a scrub/unscrub extension pair,
+receives and what is written to the cache. For a swap/restore extension pair,
 Phase 3 restores the original bytes, so the cache stores originals while the
 wire carried only fakes.
 
-### SSE-Aware Unscrubbing
+### SSE-Aware Restore
 
-`ScrubExt::on_response_stream` MUST apply unscrubbing at the **semantic SSE text level**
+`DoppelExt::on_response_stream` MUST apply restoring at the **semantic SSE text level**
 for responses where the first bytes of the stream match the `data: ` or `event: ` SSE
 prefix. Anthropic's real API starts each event with a named `event:` line (e.g.,
 `event: message_start`) before the `data:` line, so the first bytes of the stream are
 `event: ` rather than `data: `.
-The raw-byte Aho-Corasick approach (`unscrub_stream`) remains in use for non-SSE responses,
+The raw-byte Aho-Corasick approach (`restore_stream`) remains in use for non-SSE responses,
 where it works correctly. The two paths are selected automatically; no configuration is
 required.
 
-**Problem.** `unscrub_stream` is a raw byte-level Aho-Corasick scanner. It correctly
+**Problem.** `restore_stream` is a raw byte-level Aho-Corasick scanner. It correctly
 restores fakes that span HTTP chunk boundaries (the fake is still a contiguous byte
 sequence across chunk edges). It does NOT work for SSE streaming responses.
 
@@ -317,7 +317,7 @@ a contiguous byte sequence in the raw stream, so Aho-Corasick never matches it. 
 silently passes the fake to the client and writes it to the cache.
 
 **Requirement.** For `content-type: text/event-stream` responses, Phase 3 MUST apply
-unscrubbing at the **semantic SSE text level**:
+restoring at the **semantic SSE text level**:
 
 1. Parse each `data:` line as a JSON object.
 2. Locate the provider-specific text field (see table).
@@ -326,7 +326,7 @@ unscrubbing at the **semantic SSE text level**:
 4. When a complete fake is detected, replace it with the decrypted original.
 5. Re-encode the corrected text back into the SSE event and emit it.
 
-The non-SSE (plain JSON) response path MUST continue to use `unscrub_stream`
+The non-SSE (plain JSON) response path MUST continue to use `restore_stream`
 unchanged — it works correctly there.
 
 **Provider SSE text paths:**
@@ -338,12 +338,12 @@ unchanged — it works correctly there.
 | OpenRouter | `choices[0].delta.content` | OpenAI-compatible |
 | Gemini | `candidates[0].content.parts[0].text` | streaming generate-content response |
 
-**Implementation.** `ScrubExt::on_response_stream` wraps the response stream in
-`SseUnscrubStream`, which auto-detects the response type by peeking at the first bytes
+**Implementation.** `DoppelExt::on_response_stream` wraps the response stream in
+`SseRestoreStream`, which auto-detects the response type by peeking at the first bytes
 (detecting both `data: ` and `event: ` SSE prefixes).
 For SSE streams it buffers all frames, accumulates provider text fields across events,
-runs `unscrub_stream` on the concatenated text, then redistributes the restored text back
+runs `restore_stream` on the concatenated text, then redistributes the restored text back
 into the original frames (all restored text is placed in the first text event; subsequent
 text events carry an empty string). For non-SSE streams the raw bytes are passed through
-`unscrub_stream` unchanged. Integration tests cover all four providers: Anthropic, OpenAI,
+`restore_stream` unchanged. Integration tests cover all four providers: Anthropic, OpenAI,
 OpenRouter (identical format to OpenAI), and Gemini.

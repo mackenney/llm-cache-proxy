@@ -83,7 +83,7 @@ struct ExtensionsConfig {
     doppel: Option<DoppelConfig>,
 }
 
-/// Configuration for the built-in scrub/unscrub extension.
+/// Configuration for the built-in swap/restore extension.
 ///
 /// ```toml
 /// [extensions.doppel]
@@ -91,7 +91,7 @@ struct ExtensionsConfig {
 /// ```
 ///
 /// Create a patterns file with `doppel init <path>`.
-/// Register Tier 2 secrets with `doppel secret add <value>`.
+/// Register registered secrets with `doppel secret add <value>`.
 #[derive(Deserialize, Default)]
 struct DoppelConfig {
     secrets_file: Option<String>,
@@ -245,9 +245,9 @@ fn default_db_path() -> PathBuf {
 
 /// Build the extension pipeline from the `[extensions]` section of the config.
 ///
-/// - `[extensions.doppel]` absent → empty pipeline (no scrubbing).
+/// - `[extensions.doppel]` absent → empty pipeline (no swapping).
 /// - `[extensions.doppel]` present, no `secrets_file` → warning with setup instructions.
-/// - `secrets_file` set, file missing or invalid → warning, no scrubbing.
+/// - `secrets_file` set, file missing or invalid → warning, no swapping.
 /// - `secrets_file` set, file valid → `DoppelExt` registered.
 fn build_extension_pipeline(ext: Option<&ExtensionsConfig>) -> ExtensionPipeline {
     let Some(ext) = ext else {
@@ -271,9 +271,9 @@ fn build_extension_pipeline(ext: Option<&ExtensionsConfig>) -> ExtensionPipeline
     let path = expand_tilde(raw_path);
 
     match DoppelExt::from_secrets_file(&path) {
-        Ok(scrub) => {
+        Ok(swap) => {
             tracing::info!(path = %path.display(), "doppel extension loaded");
-            ExtensionPipeline::new().register(scrub)
+            ExtensionPipeline::new().register(swap)
         }
         Err(e) => {
             tracing::warn!(
