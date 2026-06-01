@@ -41,7 +41,7 @@ use crate::extensions::{
 
 use crate::ext::sse_restore::SseRestoreStream;
 
-/// Extension that scrubs detected secrets from request bodies before they are
+/// Extension that swaps detected secrets from request bodies before they are
 /// forwarded to the upstream, and restores them in the response stream.
 ///
 /// Construct with one or more [`Pattern`]s (Tier 1 built-ins from
@@ -203,7 +203,7 @@ mod tests {
 
         assert!(
             !scrubbed.windows(ANT.len()).any(|w| w == ANT),
-            "real key must not appear in scrubbed body"
+            "real key must not appear in swapped body"
         );
         assert!(
             state.get("entries").is_some(),
@@ -292,7 +292,7 @@ mod tests {
 
         assert!(
             !scrubbed.windows(OPENAI.len()).any(|w| w == OPENAI),
-            "OpenAI key must be scrubbed"
+            "OpenAI key must be swapped"
         );
         assert!(state.get("entries").is_some());
     }
