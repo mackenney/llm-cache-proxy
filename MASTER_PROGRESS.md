@@ -8,6 +8,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | Item | Plan | Notes |
 |---|---|---|
+| **rename-to-doppel** | [plans/rename-to-doppel](./plans/rename-to-doppel/PROGRESS.md) | Rename `its-classified` → `doppel`, `scrub/unscrub` → `swap/restore`, all dependent types and files |
 ---
 
 ## Queued
