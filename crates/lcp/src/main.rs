@@ -7,7 +7,7 @@ use serde::Deserialize;
 use tracing_subscriber::EnvFilter;
 
 use lcp_core::Cache;
-use lcp_server::{ExtensionPipeline, ScrubExt, ServerConfig, serve};
+use lcp_server::{DoppelExt, ExtensionPipeline, ServerConfig, serve};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -80,21 +80,21 @@ struct FileConfig {
 /// Per-extension configuration block under `[extensions]`.
 #[derive(Deserialize, Default)]
 struct ExtensionsConfig {
-    scrub: Option<ScrubConfig>,
+    doppel: Option<DoppelConfig>,
 }
 
-/// Configuration for the built-in scrub/unscrub extension.
+/// Configuration for the built-in swap/restore extension.
 ///
 /// ```toml
-/// [extensions.scrub]
-/// patterns_file = "~/.config/lcp/patterns.toml"
+/// [extensions.doppel]
+/// secrets_file = "~/.config/lcp/patterns.toml"
 /// ```
 ///
-/// Create a patterns file with `its-classified init <path>`.
-/// Register Tier 2 secrets with `its-classified register --patterns <path>`.
+/// Create a patterns file with `doppel init <path>`.
+/// Register registered secrets with `doppel secret add <value>`.
 #[derive(Deserialize, Default)]
-struct ScrubConfig {
-    patterns_file: Option<String>,
+struct DoppelConfig {
+    secrets_file: Option<String>,
 }
 
 /// Scan argv for `--config <path>` or `--config=<path>` without a full parse.
@@ -222,16 +222,16 @@ fn print_config(cli: &Cli, ext: Option<&ExtensionsConfig>) {
 
     println!();
     match ext
-        .and_then(|e| e.scrub.as_ref())
-        .and_then(|s| s.patterns_file.as_deref())
+        .and_then(|e| e.doppel.as_ref())
+        .and_then(|s| s.secrets_file.as_deref())
     {
         Some(p) => {
-            println!("[extensions.scrub]");
-            println!("patterns_file = \"{}\"", p);
+            println!("[extensions.doppel]");
+            println!("secrets_file = \"{}\"", p);
         }
         None => {
-            println!("# [extensions.scrub]");
-            println!("# patterns_file = \"\"  # run: its-classified init <path>");
+            println!("# [extensions.doppel]");
+            println!("# secrets_file = \"\"  # run: doppel init <path>");
         }
     }
 }
@@ -245,41 +245,41 @@ fn default_db_path() -> PathBuf {
 
 /// Build the extension pipeline from the `[extensions]` section of the config.
 ///
-/// - `[extensions.scrub]` absent → empty pipeline (no scrubbing).
-/// - `[extensions.scrub]` present, no `patterns_file` → warning with setup instructions.
-/// - `patterns_file` set, file missing or invalid → warning, no scrubbing.
-/// - `patterns_file` set, file valid → `ScrubExt` registered.
+/// - `[extensions.doppel]` absent → empty pipeline (no swapping).
+/// - `[extensions.doppel]` present, no `secrets_file` → warning with setup instructions.
+/// - `secrets_file` set, file missing or invalid → warning, no swapping.
+/// - `secrets_file` set, file valid → `DoppelExt` registered.
 fn build_extension_pipeline(ext: Option<&ExtensionsConfig>) -> ExtensionPipeline {
     let Some(ext) = ext else {
         return ExtensionPipeline::new();
     };
 
-    let Some(scrub_cfg) = &ext.scrub else {
+    let Some(doppel_cfg) = &ext.doppel else {
         return ExtensionPipeline::new();
     };
 
-    let Some(raw_path) = &scrub_cfg.patterns_file else {
+    let Some(raw_path) = &doppel_cfg.secrets_file else {
         tracing::warn!(
-            "[extensions.scrub] is configured but `patterns_file` is not set; \
-             scrubbing is disabled. \
-             Add `patterns_file = \"~/.config/lcp/patterns.toml\"` to [extensions.scrub], \
-             then run `its-classified init <path>` to create the file."
+            "[extensions.doppel] is configured but `secrets_file` is not set; \
+             doppel extension is disabled. \
+             Add `secrets_file = \"~/.config/lcp/patterns.toml\"` to [extensions.doppel], \
+             then run `doppel init <path>` to create the file."
         );
         return ExtensionPipeline::new();
     };
 
     let path = expand_tilde(raw_path);
 
-    match ScrubExt::from_patterns_file(&path) {
-        Ok(scrub) => {
-            tracing::info!(path = %path.display(), "scrub extension loaded");
-            ExtensionPipeline::new().register(scrub)
+    match DoppelExt::from_secrets_file(&path) {
+        Ok(swap) => {
+            tracing::info!(path = %path.display(), "doppel extension loaded");
+            ExtensionPipeline::new().register(swap)
         }
         Err(e) => {
             tracing::warn!(
                 path = %path.display(),
-                "scrub patterns file could not be loaded; scrubbing is disabled. \
-                 Run `its-classified init {}` to create it, then restart lcp. Error: {e}",
+                "doppel secrets file could not be loaded; doppel extension is disabled. \
+                 Run `doppel init {}` to create it, then restart lcp. Error: {e}",
                 path.display(),
             );
             ExtensionPipeline::new()

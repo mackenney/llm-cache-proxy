@@ -6,15 +6,13 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 ## In Progress
 
-| Item | Plan | Notes |
-|---|---|---|
----
+_(none)_
 
 ## Queued
 
 | Plan | What |
 |---|---|
-| _(future)_ | **System-prompt cache-key normalization** — exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, `Current working directory: …`) from the cache key so the same logical prompt gets the same key across days and directories. **The forwarded request is never modified** — the provider always sees the real values. Only the bytes fed into BLAKE3 are affected. Configured via `[extensions.system_prompt_scrub]` as a list of regexes matched against the system message body (Anthropic top-level `system` field or first `role:system` message). Motivation: without this, every new day or working directory busts the entire cache even when the prompt logic is identical. |
+| _(future)_ | **System-prompt cache-key normalization** — exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, `Current working directory: …`) from the cache key so the same logical prompt gets the same key across days and directories. **The forwarded request is never modified** — the provider always sees the real values. Only the bytes fed into BLAKE3 are affected. Configured via `[extensions.system_prompt_normalize]` as a list of regexes matched against the system message body (Anthropic top-level `system` field or first `role:system` message). Motivation: without this, every new day or working directory busts the entire cache even when the prompt logic is identical. |
 ## Completed
 
 ### Foundation
@@ -34,6 +32,12 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | What | Ref |
 |---|---|
+| `rename-to-doppel` — rename `its-classified` → `doppel`, `swap`/`restore` verbs, `SecretsFile`, `DoppelExt` throughout | 887d985 |
+| `rename-to-doppel` — rename `its-classified` → `doppel`, `swap`/`restore` verbs, `SecretsFile`, `DoppelExt` throughout | 887d985 |
+| fix: stale scrub/unscrub vocabulary in docs, tests, CLI strings, SPEC.md | 253ffa1 |
+
+| What | Ref |
+|---|---|
 | Fix spec gaps: tracing, bypass headers, decompression, timeout, stats (17 tests passing) | 6dfbc71 |
 | Gemini provider, `GET /cache/<key>`, `GET /trace/<id>?full=true`, `FullEntry`/`inspect`/`inspect_trace` (17 tests passing) | c0230a4 |
 | MockUpstream + TestHarness + 10 Priority 1 spec invariant tests (cache hit/miss, 41 tests passing) | eda6d31 |
@@ -44,7 +48,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | norm1: Provider-aware cache key normalization — `normalization_strip_fields`, `cache_key(provider,…)`, 9 spec invariant tests (85→94 tests) | 4b01572 |
 | ext-1: Extension pipeline — Phase 1/2/3 hooks, SensitiveState opaque store, proxy wiring, 10 spec invariant tests (99→108 tests) | be99fd3 |
 | cr1: code review fixes — 3 BLOCKERs, 3 IMPORTANTs, 3 perf, 3 maintenance (108→111 tests) | f93fd81 |
-| SSE-aware unscrubbing: `SseUnscrubStream` replaces raw-byte unscrub for SSE responses; text accumulated across events, fake restored; all 4 providers covered | 6d30152 |
+| SSE-aware restoring: `SseRestoreStream` replaces raw-byte restore for SSE responses; text accumulated across events, fake restored; all 4 providers covered | 6d30152 |
 | Fix SSE detection for Anthropic real API: `is_sse_first_chunk` now detects `event: ` prefix; Phase 3 E2E verified live with fabricated-key roundtrip test | 6e39cc0 |
 | cr2: review fixes — frame reconstruction bug, UTF-8 chunk corruption, empty-chunk latch, partial-state error, hex crate, SPEC update, 2 new tests (159 passing) | a834725 |
 

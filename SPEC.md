@@ -21,7 +21,7 @@ replay.
 - **System-wide transparent interception** (TLS MITM, `/etc/hosts` redirect,
   iptables redirect) — clients must point at lcp explicitly via an env var.
 - **Arbitrary plugin execution** — no third-party interceptor plugins are loaded
-  at runtime. The built-in scrub extension is the only extension that runs;
+  at runtime. The built-in doppel extension is the only extension that runs;
   the architecture exposes insertion points for future additions without
   structural changes.
 - **Authentication / multi-user isolation** — lcp is a single-user local
@@ -188,10 +188,10 @@ transparently in both directions:
 `Accept-Encoding` MUST be stripped from all forwarded requests so that
 upstream providers do not apply compression to SSE streams.
 
-When the scrub/unscrub extension is active, Phase 3 MUST apply unscrubbing
+When the swap/restore extension is active, Phase 3 MUST apply restoring
 at the semantic SSE text level for streaming responses — raw byte-level
 matching is insufficient because fakes are split across `data:` events.
-See `crates/lcp-server/SPEC.md §SSE-Aware Unscrubbing`.
+See `crates/lcp-server/SPEC.md §SSE-Aware Restore`.
 
 ## Tracing
 
@@ -323,7 +323,7 @@ lcp reads a TOML config file on startup:
 | `--gemini-upstream` | `LCP_GEMINI_UPSTREAM` | see table above | Gemini upstream |
 | `--print-config` | _(none)_ | _(flag)_ | Print effective config as TOML and exit |
 
-Path values (`--db`, `patterns_file`) support `~` expansion: a leading `~` is
+Path values (`--db`, `secrets_file`) support `~` expansion: a leading `~` is
 replaced with the user's home directory.
 
 ### Extension configuration
@@ -331,26 +331,26 @@ replaced with the user's home directory.
 Extension options are set in the config TOML under `[extensions]` — they have
 no CLI flag or env var equivalent.
 
-#### `[extensions.scrub]`
+#### `[extensions.doppel]`
 
-Enables the built-in scrub/unscrub extension (backed by `its-classified`).
+Enables the built-in swap/restore extension (backed by `doppel`).
 
 | Key | Default | Description |
 |---|---|---|
-| `patterns_file` | _(unset)_ | Path to an `its-classified` TOML patterns file. `~` is expanded. |
+| `secrets_file` | _(unset)_ | Path to an `doppel` TOML patterns file. `~` is expanded. |
 
 Behaviour when the section is present:
-- `patterns_file` absent → warning at startup, scrubbing disabled.
-- `patterns_file` set, file missing or invalid → warning at startup, scrubbing disabled.
-- `patterns_file` set, file valid → scrub extension loaded; all patterns in the file are active.
+- `secrets_file` absent → warning at startup, swapping disabled.
+- `secrets_file` set, file missing or invalid → warning at startup, swapping disabled.
+- `secrets_file` set, file valid → doppel extension loaded; all patterns in the file are active.
 
-Create a patterns file: `its-classified init <path>`.
-Register Tier 2 secrets: `its-classified register --patterns <path>`.
+Create a patterns file: `doppel init <path>`.
+Register registered secrets: `doppel register --patterns <path>`.
 
 Example:
 ```toml
-[extensions.scrub]
-patterns_file = "~/.config/lcp/patterns.toml"
+[extensions.doppel]
+secrets_file = "~/.config/lcp/patterns.toml"
 ```
 ## Extension Architecture
 
@@ -361,8 +361,8 @@ rewriting the proxy pipeline. Intended insertion points:
 - Before response storage: response filtering, enrichment.
 - After cache lookup: audit logging, cache decoration.
 
-The scrub/unscrub extension is the only built-in extension and is opt-in
-via `[extensions.scrub]` in the config file.
+The swap/restore extension is the only built-in extension and is opt-in
+via `[extensions.doppel]` in the config file.
 
 ## Per-Component Specs
 

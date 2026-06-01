@@ -1,24 +1,24 @@
-//! Scrub/unscrub integration tests.
+//! Swap/restore integration tests.
 //!
-//! Exercises `ScrubExt` (backed by `its-classified`) end-to-end through the
+//! Exercises `DoppelExt` (backed by `doppel`) end-to-end through the
 //! proxy pipeline:
-//!   - Phase 2: `its_classified::scrub` replaces real secrets with fakes before
+//!   - Phase 2: `doppel::swap` replaces real secrets with fakes before
 //!     the upstream sees the body.
-//!   - Phase 3: `its_classified::unscrub_stream` restores originals in the
+//!   - Phase 3: `doppel::restore_stream` restores originals in the
 //!     response stream before the response is cached and returned.
 //!
 //! SPEC ref: lcp-server/SPEC.md §Pipeline and Cache Interaction
-//!   "For a scrub/unscrub extension pair, Phase 3 restores the original bytes,
+//!   "For a swap/restore extension pair, Phase 3 restores the original bytes,
 //!    so the cache stores originals while the wire carried only fakes."
 
-use its_classified::{register, tier1::patterns};
-use lcp_server::{ExtensionPipeline, ScrubExt};
+use doppel::{patterns, register};
+use lcp_server::{DoppelExt, ExtensionPipeline};
 
 use crate::common::{MockUpstream, TestHarness};
 
 // ---------------------------------------------------------------------------
 // Synthetic test secrets — NOT real credentials.
-// Structures match the built-in Tier 1 patterns of its-classified exactly.
+// Structures match the built-in patterns of doppel exactly.
 // ---------------------------------------------------------------------------
 
 /// Anthropic API key (sk-ant-api03-…)
@@ -28,7 +28,7 @@ const ANT: &[u8] =
 /// OpenAI classic key (sk-…)
 const OPENAI_CLASSIC: &[u8] = b"sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-// OpenAI project key is constructed at test time — see wire_openai_project_key_scrubbed.
+// OpenAI project key is constructed at test time — see wire_openai_project_key_swapped.
 
 /// AWS AKIA access key ID
 const AWS_AKIA: &[u8] = b"AKIAIOSFODNN7EXAMPLE";
@@ -43,10 +43,10 @@ const GITHUB_FG: &[u8] =
 /// GCP API key (AIzaSy…)
 const GCP: &[u8] = b"AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
-/// Tier 2: arbitrary token long enough for registration (≥ 14 variable bytes)
+/// registered: arbitrary token long enough for registration (≥ 14 variable bytes)
 const TIER2_TOKEN: &[u8] = b"my-internal-bearer-token-abcdef1234567890-for-e2e-tests";
 
-/// Tier 2: a UUID-style identifier (enough bytes for Tier 2 registration)
+/// registered: a UUID-style identifier (enough bytes for registered registration)
 const TIER2_UUID_LIKE: &[u8] = b"f47ac10b-58cc-4372-a567-0e02b2c3d479abcdef0123456789";
 
 // ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ fn assert_present(haystack: &[u8], needles: &[&[u8]], ctx: &str) {
 // Per-morphology wire tests: upstream receives a fake, never the real secret
 // ---------------------------------------------------------------------------
 
-macro_rules! wire_scrub_test {
+macro_rules! wire_doppel_test {
     ($name:ident, $secret:expr, $patterns:expr) => {
         #[tokio::test]
         async fn $name() {
@@ -90,7 +90,7 @@ macro_rules! wire_scrub_test {
                 .await;
             let harness = TestHarness::builder()
                 .mock(mock)
-                .extensions(ExtensionPipeline::new().register(ScrubExt::new(pats)))
+                .extensions(ExtensionPipeline::new().register(DoppelExt::new(pats)))
                 .build()
                 .await;
             let client = reqwest::Client::new();
@@ -122,44 +122,40 @@ macro_rules! wire_scrub_test {
     };
 }
 
-wire_scrub_test!(
-    wire_anthropic_key_scrubbed,
-    ANT,
-    vec![patterns::anthropic()]
-);
-wire_scrub_test!(
-    wire_openai_classic_key_scrubbed,
+wire_doppel_test!(wire_anthropic_key_swapped, ANT, vec![patterns::anthropic()]);
+wire_doppel_test!(
+    wire_openai_classic_key_swapped,
     OPENAI_CLASSIC,
     vec![patterns::openai_classic()]
 );
 
-wire_scrub_test!(wire_aws_akia_scrubbed, AWS_AKIA, vec![patterns::aws_akia()]);
-wire_scrub_test!(
-    wire_github_classic_pat_scrubbed,
+wire_doppel_test!(wire_aws_akia_swapped, AWS_AKIA, vec![patterns::aws_akia()]);
+wire_doppel_test!(
+    wire_github_classic_pat_swapped,
     GITHUB_CLASSIC,
     vec![patterns::github_classic()]
 );
-wire_scrub_test!(
-    wire_github_fine_grained_pat_scrubbed,
+wire_doppel_test!(
+    wire_github_fine_grained_pat_swapped,
     GITHUB_FG,
     vec![patterns::github_fine_grained()]
 );
-wire_scrub_test!(wire_gcp_key_scrubbed, GCP, vec![patterns::gcp()]);
-wire_scrub_test!(
-    wire_tier2_arbitrary_token_scrubbed,
+wire_doppel_test!(wire_gcp_key_swapped, GCP, vec![patterns::gcp()]);
+wire_doppel_test!(
+    wire_registered_arbitrary_token_swapped,
     TIER2_TOKEN,
-    vec![register(TIER2_TOKEN).expect("tier2 register failed")]
+    vec![register(TIER2_TOKEN).expect("registered register failed")]
 );
-wire_scrub_test!(
-    wire_tier2_uuid_like_scrubbed,
+wire_doppel_test!(
+    wire_registered_uuid_like_swapped,
     TIER2_UUID_LIKE,
-    vec![register(TIER2_UUID_LIKE).expect("tier2 register failed")]
+    vec![register(TIER2_UUID_LIKE).expect("registered register failed")]
 );
 
 // OpenAI project key: sk-proj- (8) + 58 url-safe-base64 chars + T3BlbkFJ (8) + 58 more = 132 total.
 // Constructed here to avoid miscounting in a raw byte string.
 #[tokio::test]
-async fn wire_openai_project_key_scrubbed() {
+async fn wire_openai_project_key_swapped() {
     let mut key: Vec<u8> = b"sk-proj-".to_vec();
     key.extend(std::iter::repeat_n(b'A', 58));
     key.extend_from_slice(b"T3BlbkFJ");
@@ -172,7 +168,7 @@ async fn wire_openai_project_key_scrubbed() {
     let harness = TestHarness::builder()
         .mock(mock)
         .extensions(
-            ExtensionPipeline::new().register(ScrubExt::new(vec![patterns::openai_project()])),
+            ExtensionPipeline::new().register(DoppelExt::new(vec![patterns::openai_project()])),
         )
         .build()
         .await;
@@ -203,18 +199,18 @@ async fn wire_openai_project_key_scrubbed() {
 }
 
 // ---------------------------------------------------------------------------
-// Multiple Tier 1 secrets in the same payload — all scrubbed
+// Multiple secrets in the same payload — all swapped
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn wire_multiple_tier1_secrets_all_scrubbed() {
+async fn wire_multiple_secrets_all_swapped() {
     let mock = MockUpstream::builder()
         .json(200, r#"{"result":"ok"}"#)
         .build()
         .await;
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![
             patterns::anthropic(),
             patterns::aws_akia(),
         ])))
@@ -252,12 +248,12 @@ async fn wire_multiple_tier1_secrets_all_scrubbed() {
 }
 
 // ---------------------------------------------------------------------------
-// Tier 1 + Tier 2 in same payload
+// Tier 1 + registered in same payload
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn wire_tier1_and_tier2_in_same_payload() {
-    let pat2 = register(TIER2_TOKEN).expect("tier2 register");
+async fn wire_pattern_and_registered_in_same_payload() {
+    let pat2 = register(TIER2_TOKEN).expect("registered register");
 
     let mock = MockUpstream::builder()
         .json(200, r#"{"result":"ok"}"#)
@@ -266,7 +262,7 @@ async fn wire_tier1_and_tier2_in_same_payload() {
     let harness = TestHarness::builder()
         .mock(mock)
         .extensions(
-            ExtensionPipeline::new().register(ScrubExt::new(vec![patterns::anthropic(), pat2])),
+            ExtensionPipeline::new().register(DoppelExt::new(vec![patterns::anthropic(), pat2])),
         )
         .build()
         .await;
@@ -297,7 +293,7 @@ async fn wire_tier1_and_tier2_in_same_payload() {
     assert_absent(
         upstream_body,
         &[ANT, TIER2_TOKEN],
-        "upstream body (tier1+tier2)",
+        "upstream body (tier1+registered)",
     );
 }
 
@@ -314,7 +310,7 @@ async fn wire_unregistered_secret_passes_through() {
         .await;
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![patterns::anthropic()])))
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![patterns::anthropic()])))
         .build()
         .await;
     let client = reqwest::Client::new();
@@ -344,7 +340,7 @@ async fn wire_unregistered_secret_passes_through() {
     assert_absent(
         upstream_body,
         &[ANT],
-        "upstream body (registered secret must be scrubbed)",
+        "upstream body (registered secret must be swapped)",
     );
     assert_present(
         upstream_body,
@@ -359,13 +355,13 @@ async fn wire_unregistered_secret_passes_through() {
 
 #[tokio::test]
 async fn client_receives_restored_secret_in_response() {
-    // Use the same Pattern instance for pre-computation and ScrubExt so that
+    // Use the same Pattern instance for pre-computation and DoppelExt so that
     // the fake is identical in both — each patterns::*() call produces a
     // fresh ephemeral salt.
-    use its_classified::scrub as ic_scrub;
+    use doppel::swap as doppel_swap;
     let pat = patterns::anthropic();
     let body_bytes = [b"key: ".as_slice(), ANT].concat();
-    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
     let fake_bytes = sr.entries[0].fake.clone();
     let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
 
@@ -373,7 +369,7 @@ async fn client_receives_restored_secret_in_response() {
     let mock = MockUpstream::builder().json(200, mock_resp).build().await;
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
         .build()
         .await;
     let client = reqwest::Client::new();
@@ -407,10 +403,10 @@ async fn client_receives_restored_secret_in_response() {
 
 #[tokio::test]
 async fn cache_stores_restored_content_not_fake() {
-    use its_classified::scrub as ic_scrub;
+    use doppel::swap as doppel_swap;
     let pat = patterns::anthropic();
     let body_bytes = [b"key: ".as_slice(), ANT].concat();
-    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
     let fake_bytes = sr.entries[0].fake.clone();
     let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
 
@@ -418,7 +414,7 @@ async fn cache_stores_restored_content_not_fake() {
     let mock = MockUpstream::builder().json(200, mock_resp).build().await;
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
         .build()
         .await;
     let client = reqwest::Client::new();
@@ -459,14 +455,14 @@ async fn cache_stores_restored_content_not_fake() {
 
 #[tokio::test]
 async fn sse_cache_stores_restored_content_not_fake() {
-    use its_classified::scrub as ic_scrub;
+    use doppel::swap as doppel_swap;
     let pat = patterns::openai_classic();
     let body_bytes = [b"key: ".as_slice(), OPENAI_CLASSIC].concat();
-    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
     let fake_bytes = sr.entries[0].fake.clone();
     let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
 
-    // Split the fake across 2 delta events to trigger SSE unscrubbing.
+    // Split the fake across 2 delta events to trigger SSE restore.
     let mid = fake_str.len() / 2;
     let (p1, p2) = (&fake_str[..mid], &fake_str[mid..]);
     let sse_chunks = vec![
@@ -482,7 +478,7 @@ async fn sse_cache_stores_restored_content_not_fake() {
     let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
         .build()
         .await;
     let client = reqwest::Client::new();
@@ -534,17 +530,17 @@ async fn sse_cache_stores_restored_content_not_fake() {
 
 #[tokio::test]
 async fn cache_hit_replays_restored_content() {
-    use its_classified::scrub as ic_scrub;
+    use doppel::swap as doppel_swap;
     let pat = patterns::anthropic();
     let body_bytes = [b"key: ".as_slice(), ANT].concat();
-    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
     let fake_str = String::from_utf8_lossy(&sr.entries[0].fake).into_owned();
 
     let mock_resp = format!(r#"{{"echo":"{fake_str}"}}"#);
     let mock = MockUpstream::builder().json(200, mock_resp).build().await;
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
         .build()
         .await;
     let client = reqwest::Client::new();
@@ -589,7 +585,7 @@ async fn cache_hit_replays_restored_content() {
 
 // ---------------------------------------------------------------------------
 // Different secrets → different cache keys
-// (scrubbing is Phase 2 — cache key is derived from the original body)
+// (swapping is Phase 2 — cache key is derived from the original body)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -606,7 +602,7 @@ async fn different_secrets_produce_different_cache_keys() {
 
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![patterns::anthropic()])))
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![patterns::anthropic()])))
         .build()
         .await;
     let client = reqwest::Client::new();
@@ -659,7 +655,7 @@ async fn different_secrets_produce_different_cache_keys() {
     assert_ne!(
         key1, key2,
         "different secrets must produce different cache keys \
-         (scrubbing is Phase 2 — cache key derived from original body)"
+         (swapping is Phase 2 — cache key derived from original body)"
     );
     assert_eq!(harness.cache().list_entries().unwrap().len(), 2);
 }
@@ -676,7 +672,7 @@ async fn clean_payload_passes_through_unmodified() {
         .await;
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(patterns::all())))
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(patterns::all())))
         .build()
         .await;
     let client = reqwest::Client::new();
@@ -708,15 +704,15 @@ async fn clean_payload_passes_through_unmodified() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn unscrub_restores_secret_from_anthropic_sse_stream() {
-    // SPEC ref: crates/lcp-server/SPEC.md §SSE-Aware Unscrubbing
-    use its_classified::scrub as ic_scrub;
+async fn restore_returns_secret_from_anthropic_sse_stream() {
+    // SPEC ref: crates/lcp-server/SPEC.md §SSE-Aware Restore
+    use doppel::swap as doppel_swap;
 
-    // Use the same Pattern instance for both pre-computation and ScrubExt so the
+    // Use the same Pattern instance for both pre-computation and DoppelExt so the
     // fake is derived from the same salt and is therefore identical in both.
     let pat = patterns::anthropic();
     let body_bytes = [b"key: ".as_slice(), ANT].concat();
-    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
     let fake_bytes = sr.entries[0].fake.clone();
     let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
 
@@ -754,7 +750,7 @@ async fn unscrub_restores_secret_from_anthropic_sse_stream() {
     let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
         .build()
         .await;
     let client = reqwest::Client::new();
@@ -785,20 +781,20 @@ async fn unscrub_restores_secret_from_anthropic_sse_stream() {
     assert_absent(
         &resp_bytes,
         &[&fake_bytes],
-        "client SSE response: scrubbed fake must not be visible to client",
+        "client SSE response: swapped fake must not be visible to client",
     );
 }
 
 #[tokio::test]
-async fn unscrub_restores_secret_from_anthropic_sse_stream_with_event_prefix() {
+async fn restore_returns_secret_from_anthropic_sse_stream_with_event_prefix() {
     // Regression test: Anthropic's real API prefixes every data line with an
     // event: line. The SSE detector must recognize `event: ` as SSE, and the
-    // unscrub pipeline must handle the event: prefix lines correctly.
-    use its_classified::scrub as ic_scrub;
+    // restore pipeline must handle the event: prefix lines correctly.
+    use doppel::swap as doppel_swap;
 
     let pat = patterns::anthropic();
     let body_bytes = [b"key: ".as_slice(), ANT].concat();
-    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
     let fake_bytes = sr.entries[0].fake.clone();
     let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
 
@@ -836,7 +832,7 @@ async fn unscrub_restores_secret_from_anthropic_sse_stream_with_event_prefix() {
     let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
         .build()
         .await;
     let client = reqwest::Client::new();
@@ -865,17 +861,17 @@ async fn unscrub_restores_secret_from_anthropic_sse_stream_with_event_prefix() {
     assert_absent(
         &resp_bytes,
         &[&fake_bytes],
-        "client SSE response: scrubbed fake must not be visible to client",
+        "client SSE response: swapped fake must not be visible to client",
     );
 }
 
 #[tokio::test]
-async fn unscrub_restores_secret_from_openai_sse_stream() {
-    use its_classified::scrub as ic_scrub;
+async fn restore_returns_secret_from_openai_sse_stream() {
+    use doppel::swap as doppel_swap;
 
     let pat = patterns::openai_classic();
     let body_bytes = [b"key: ".as_slice(), OPENAI_CLASSIC].concat();
-    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
     let fake_bytes = sr.entries[0].fake.clone();
     let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
 
@@ -900,7 +896,7 @@ async fn unscrub_restores_secret_from_openai_sse_stream() {
     let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
         .build()
         .await;
     let client = reqwest::Client::new();
@@ -932,17 +928,17 @@ async fn unscrub_restores_secret_from_openai_sse_stream() {
     assert_absent(
         &resp_bytes,
         &[&fake_bytes],
-        "client OpenAI SSE response: scrubbed fake must not be visible",
+        "client OpenAI SSE response: swapped fake must not be visible",
     );
 }
 
 #[tokio::test]
-async fn unscrub_restores_secret_from_gemini_sse_stream() {
-    use its_classified::scrub as ic_scrub;
+async fn restore_returns_secret_from_gemini_sse_stream() {
+    use doppel::swap as doppel_swap;
 
     let pat = patterns::gcp();
     let body_bytes = [b"key: ".as_slice(), GCP].concat();
-    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
     let fake_bytes = sr.entries[0].fake.clone();
     let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
 
@@ -965,7 +961,7 @@ async fn unscrub_restores_secret_from_gemini_sse_stream() {
     let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
         .build()
         .await;
     let client = reqwest::Client::new();
@@ -997,19 +993,19 @@ async fn unscrub_restores_secret_from_gemini_sse_stream() {
     assert_absent(
         &resp_bytes,
         &[&fake_bytes],
-        "client Gemini SSE response: scrubbed fake must not be visible",
+        "client Gemini SSE response: swapped fake must not be visible",
     );
 }
 
 #[tokio::test]
-async fn unscrub_restores_secret_from_openrouter_sse_stream() {
+async fn restore_returns_secret_from_openrouter_sse_stream() {
     // OpenRouter uses the same wire format as OpenAI (choices[0].delta.content).
-    // SPEC ref: crates/lcp-server/SPEC.md §SSE-Aware Unscrubbing
-    use its_classified::scrub as ic_scrub;
+    // SPEC ref: crates/lcp-server/SPEC.md §SSE-Aware Restore
+    use doppel::swap as doppel_swap;
 
     let pat = patterns::openai_classic();
     let body_bytes = [b"key: ".as_slice(), OPENAI_CLASSIC].concat();
-    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
     let fake_bytes = sr.entries[0].fake.clone();
     let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
 
@@ -1034,7 +1030,7 @@ async fn unscrub_restores_secret_from_openrouter_sse_stream() {
     let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
     let harness = TestHarness::builder()
         .mock(mock)
-        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
         .build()
         .await;
     let client = reqwest::Client::new();
