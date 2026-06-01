@@ -21,10 +21,12 @@ use crate::extensions::ResponseStream;
 
 /// Returns `true` if the first bytes of a response chunk look like an SSE stream.
 ///
-/// The heuristic: SSE streams from all supported providers begin with `data: `.
-/// Non-SSE JSON responses begin with `{`. No content-type header access is needed.
+/// Detects both `data: ` and `event: ` line starters. Providers that emit only
+/// `data:` lines (OpenAI, OpenRouter, Gemini) start with `data: `; Anthropic's
+/// real API prefixes each data line with a named `event:` line, so the stream
+/// starts with `event: ` instead. Non-SSE JSON responses begin with `{`.
 pub fn is_sse_first_chunk(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"data: ")
+    bytes.starts_with(b"data: ") || bytes.starts_with(b"event: ")
 }
 
 /// Returns the provider-specific text field from a parsed SSE event JSON, if present.
@@ -426,6 +428,14 @@ mod tests {
     fn is_sse_detects_data_prefix() {
         assert!(is_sse_first_chunk(
             b"data: {\"type\":\"message_start\"}\n\n"
+        ));
+    }
+
+    #[test]
+    fn is_sse_detects_event_prefix() {
+        // Real Anthropic SSE streams begin with an `event:` line before `data:`.
+        assert!(is_sse_first_chunk(
+            b"event: message_start\ndata: {\"type\":\"message_start\"}\n\n"
         ));
     }
 
