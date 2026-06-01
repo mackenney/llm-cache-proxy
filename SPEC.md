@@ -188,6 +188,11 @@ transparently in both directions:
 `Accept-Encoding` MUST be stripped from all forwarded requests so that
 upstream providers do not apply compression to SSE streams.
 
+When the scrub/unscrub extension is active, Phase 3 MUST apply unscrubbing
+at the semantic SSE text level for streaming responses — raw byte-level
+matching is insufficient because fakes are split across `data:` events.
+See `crates/lcp-server/SPEC.md §SSE-Aware Unscrubbing`.
+
 ## Tracing
 
 A client MAY attach a trace identifier to any request:

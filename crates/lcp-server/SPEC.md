@@ -291,3 +291,49 @@ Phase 3 fires after the upstream responds. Its output is what the client
 receives and what is written to the cache. For a scrub/unscrub extension pair,
 Phase 3 restores the original bytes, so the cache stores originals while the
 wire carried only fakes.
+
+### SSE-Aware Unscrubbing
+
+> **TODO:** This section describes a known gap. The spec text below is a rough
+> description of the requirement; it will be polished when the fix is implemented.
+> Failing tests exist for the Anthropic case; tests for the remaining providers are
+> pending alongside the implementation.
+
+**Problem.** `unscrub_stream` is a raw byte-level Aho-Corasick scanner. It correctly
+restores fakes that span HTTP chunk boundaries (the fake is still a contiguous byte
+sequence across chunk edges). It does NOT work for SSE streaming responses.
+
+When an upstream sends `content-type: text/event-stream`, text content is delivered
+token-by-token inside individual `data:` events. If a scrubbed fake key is echoed back
+by the model, each event carries only a fragment of the fake, separated from the next
+fragment by SSE framing bytes (`}\n\ndata: {…`). The full fake key never appears as
+a contiguous byte sequence in the raw stream, so Aho-Corasick never matches it. Phase 3
+silently passes the fake to the client and writes it to the cache.
+
+**Requirement.** For `content-type: text/event-stream` responses, Phase 3 MUST apply
+unscrubbing at the **semantic SSE text level**:
+
+1. Parse each `data:` line as a JSON object.
+2. Locate the provider-specific text field (see table).
+3. Accumulate text across consecutive events; a fake may begin in one event and end
+   in a later one.
+4. When a complete fake is detected, replace it with the decrypted original.
+5. Re-encode the corrected text back into the SSE event and emit it.
+
+The non-SSE (plain JSON) response path MUST continue to use `unscrub_stream`
+unchanged — it works correctly there.
+
+**Provider SSE text paths:**
+
+| Provider | Text field path | Applicable event condition |
+|---|---|---|
+| Anthropic | `delta.text` | `type == "content_block_delta"` and `delta.type == "text_delta"` |
+| OpenAI | `choices[0].delta.content` | streaming chat completion delta |
+| OpenRouter | `choices[0].delta.content` | OpenAI-compatible |
+| Gemini | `candidates[0].content.parts[0].text` | streaming generate-content response |
+
+**Current state.** `ScrubExt::on_response_stream` passes the raw byte stream directly
+to `unscrub_stream` regardless of content type. This is correct for non-SSE responses
+and broken for SSE responses. A failing integration test covers the Anthropic case
+(`unscrub_restores_secret_from_anthropic_sse_stream`). Tests for OpenAI, OpenRouter,
+and Gemini SSE formats are pending alongside the implementation.

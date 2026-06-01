@@ -631,3 +631,97 @@ async fn clean_payload_passes_through_unmodified() {
         "clean payload must reach upstream byte-for-byte unchanged"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3 / SSE: fake split across Anthropic content_block_delta events
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn unscrub_restores_secret_from_anthropic_sse_stream() {
+    // This test is expected to FAIL until SSE-aware unscrubbing is implemented.
+    //
+    // Root cause: `unscrub_stream` uses raw-byte Aho-Corasick. For SSE responses the
+    // fake key is split across multiple content_block_delta events (one fragment per
+    // text delta) and never appears as a contiguous byte sequence in the raw stream.
+    // Phase 3 silently passes the fake through; the client receives the scrubbed fake
+    // instead of the original secret.
+    //
+    // SPEC ref: crates/lcp-server/SPEC.md §SSE-Aware Unscrubbing
+    use its_classified::scrub as ic_scrub;
+
+    // Use the same Pattern instance for both pre-computation and ScrubExt so the
+    // fake is derived from the same salt and is therefore identical in both.
+    let pat = patterns::anthropic();
+    let body_bytes = [b"key: ".as_slice(), ANT].concat();
+    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    // Split the fake across 4 content_block_delta events — simulating real Anthropic
+    // streaming where the model emits a few characters at a time. 4 fragments is
+    // enough to demonstrate the failure; real traffic uses ~30-60 events.
+    let n = fake_str.len() / 4;
+    let parts = [
+        fake_str[..n].to_owned(),
+        fake_str[n..2 * n].to_owned(),
+        fake_str[2 * n..3 * n].to_owned(),
+        fake_str[3 * n..].to_owned(),
+    ];
+
+    let mut sse_chunks: Vec<String> = vec![
+        format!(
+            "data: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null}}}}\n\n"
+        ),
+        format!(
+            "data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n"
+        ),
+    ];
+    for part in &parts {
+        sse_chunks.push(format!(
+            "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{part}\"}}}}\n\n"
+        ));
+    }
+    sse_chunks.push("data: {\"type\":\"content_block_stop\",\"index\":0}\n\n".to_owned());
+    sse_chunks.push(
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n"
+            .to_owned(),
+    );
+    sse_chunks.push("data: {\"type\":\"message_stop\"}\n\n".to_owned());
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"claude-haiku-4-5","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"key={}"}}]}}"#,
+        String::from_utf8_lossy(ANT)
+    );
+
+    let resp = client
+        .post(format!("{}/anthropic/v1/messages", harness.proxy_url()))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    // Phase 3 MUST restore the original secret in the SSE response.
+    // Currently FAILS: unscrub_stream cannot match the fake split across SSE events.
+    assert_present(
+        &resp_bytes,
+        &[ANT],
+        "client SSE response: Phase 3 must restore original secret from content_block_delta stream",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "client SSE response: scrubbed fake must not be visible to client",
+    );
+}
