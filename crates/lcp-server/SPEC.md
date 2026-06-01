@@ -132,7 +132,9 @@ hashing and forwarding.
 
 The proxy MUST NOT buffer a complete streaming response before forwarding.
 Chunks MUST be written to the downstream client as they arrive from upstream
-(cache miss) or as they are read from storage (cache hit).
+(cache miss) or as they are read from storage (cache hit). Phase 3 extension
+hooks (§Extension Pipeline) MAY buffer the response for semantic transforms;
+this is an accepted trade-off documented in each extension's spec section.
 
 `Accept-Encoding` MUST be stripped from all forwarded requests to prevent
 upstream providers from compressing SSE streams.

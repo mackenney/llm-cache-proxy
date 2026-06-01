@@ -457,6 +457,77 @@ async fn cache_stores_restored_content_not_fake() {
     );
 }
 
+#[tokio::test]
+async fn sse_cache_stores_restored_content_not_fake() {
+    use its_classified::scrub as ic_scrub;
+    let pat = patterns::openai_classic();
+    let body_bytes = [b"key: ".as_slice(), OPENAI_CLASSIC].concat();
+    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    // Split the fake across 2 delta events to trigger SSE unscrubbing.
+    let mid = fake_str.len() / 2;
+    let (p1, p2) = (&fake_str[..mid], &fake_str[mid..]);
+    let sse_chunks = vec![
+        format!(
+            "data: {{\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{p1}\"}},\"finish_reason\":null}}]}}\n\n"
+        ),
+        format!(
+            "data: {{\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{p2}\"}},\"finish_reason\":null}}]}}\n\n"
+        ),
+        "data: [DONE]\n\n".to_owned(),
+    ];
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"gpt-4o","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"key={}"}}]}}"#,
+        String::from_utf8_lossy(OPENAI_CLASSIC)
+    );
+
+    let resp = client
+        .post(format!(
+            "{}/openai/v1/chat/completions",
+            harness.proxy_url()
+        ))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    let entries = harness.cache().list_entries().unwrap();
+    assert_eq!(entries.len(), 1, "one entry must be in cache");
+
+    let full = harness
+        .cache()
+        .inspect(&entries[0].key)
+        .unwrap()
+        .expect("entry must exist");
+
+    let cached: Vec<u8> = full.chunks.iter().flat_map(|c| c.data.bytes()).collect();
+    assert_present(
+        &cached,
+        &[OPENAI_CLASSIC],
+        "cached SSE chunks (restored real value)",
+    );
+    assert_absent(
+        &cached,
+        &[&fake_bytes],
+        "cached SSE chunks (fake must not be stored)",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Cache HIT replays restored content
 // ---------------------------------------------------------------------------
@@ -638,14 +709,6 @@ async fn clean_payload_passes_through_unmodified() {
 
 #[tokio::test]
 async fn unscrub_restores_secret_from_anthropic_sse_stream() {
-    // This test is expected to FAIL until SSE-aware unscrubbing is implemented.
-    //
-    // Root cause: `unscrub_stream` uses raw-byte Aho-Corasick. For SSE responses the
-    // fake key is split across multiple content_block_delta events (one fragment per
-    // text delta) and never appears as a contiguous byte sequence in the raw stream.
-    // Phase 3 silently passes the fake through; the client receives the scrubbed fake
-    // instead of the original secret.
-    //
     // SPEC ref: crates/lcp-server/SPEC.md §SSE-Aware Unscrubbing
     use its_classified::scrub as ic_scrub;
 
@@ -713,7 +776,7 @@ async fn unscrub_restores_secret_from_anthropic_sse_stream() {
     harness.wait_for_writes().await;
 
     // Phase 3 MUST restore the original secret in the SSE response.
-    // Currently FAILS: unscrub_stream cannot match the fake split across SSE events.
+    // The fake must not reach the client.
     assert_present(
         &resp_bytes,
         &[ANT],
@@ -855,5 +918,74 @@ async fn unscrub_restores_secret_from_gemini_sse_stream() {
         &resp_bytes,
         &[&fake_bytes],
         "client Gemini SSE response: scrubbed fake must not be visible",
+    );
+}
+
+#[tokio::test]
+async fn unscrub_restores_secret_from_openrouter_sse_stream() {
+    // OpenRouter uses the same wire format as OpenAI (choices[0].delta.content).
+    // SPEC ref: crates/lcp-server/SPEC.md §SSE-Aware Unscrubbing
+    use its_classified::scrub as ic_scrub;
+
+    let pat = patterns::openai_classic();
+    let body_bytes = [b"key: ".as_slice(), OPENAI_CLASSIC].concat();
+    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    // Split the fake across 4 delta events.
+    let n = fake_str.len() / 4;
+    let parts = [
+        fake_str[..n].to_owned(),
+        fake_str[n..2 * n].to_owned(),
+        fake_str[2 * n..3 * n].to_owned(),
+        fake_str[3 * n..].to_owned(),
+    ];
+
+    let mut sse_chunks: Vec<String> = Vec::new();
+    for part in &parts {
+        sse_chunks.push(format!(
+            "data: {{\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{part}\"}},\"finish_reason\":null}}]}}\n\n"
+        ));
+    }
+    sse_chunks.push("data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n".to_owned());
+    sse_chunks.push("data: [DONE]\n\n".to_owned());
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"gpt-4o","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"key={}"}}]}}"#,
+        String::from_utf8_lossy(OPENAI_CLASSIC)
+    );
+
+    let resp = client
+        .post(format!(
+            "{}/openrouter/v1/chat/completions",
+            harness.proxy_url()
+        ))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[OPENAI_CLASSIC],
+        "client OpenRouter SSE response: Phase 3 must restore original secret",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "client OpenRouter SSE response: scrubbed fake must not be visible",
     );
 }

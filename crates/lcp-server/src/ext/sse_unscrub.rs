@@ -291,7 +291,11 @@ async fn unscrub_sse(
     // Step 1: Split into frames. SSE frames are separated by "\n\n".
     // Include the "\n\n" terminator in each frame for round-trip fidelity.
     let raw_str = String::from_utf8_lossy(&raw);
-    let frames: Vec<&str> = raw_str.split_inclusive("\n\n").collect();
+    // Normalize \r\n → \n before splitting so both line-ending styles are handled.
+    // The WHATWG EventSource spec permits \r, \n, or \r\n line endings; providers
+    // that use \r\n\r\n frame separators would otherwise produce no split boundaries.
+    let normalized = raw_str.replace("\r\n", "\n");
+    let frames: Vec<&str> = normalized.split_inclusive("\n\n").collect();
 
     // Step 2 & 3: Parse each frame and extract text content.
     struct ParsedFrame {
@@ -385,7 +389,13 @@ async fn unscrub_sse(
         } else {
             String::new()
         };
-        set_text_field(&mut json, provider, new_text);
+        if !set_text_field(&mut json, provider, new_text) {
+            // This branch is unreachable if extract_text_field and set_text_field
+            // are in sync, but the explicit guard surfaces future divergence early.
+            return Err(io::Error::other(format!(
+                "set_text_field failed for provider {provider:?} on frame that extract_text_field accepted"
+            )));
+        }
         // Re-serialize: rebuild the frame as "data: <json>\n\n".
         // Provider SSE frames contain exactly one data line, so this round-trip
         // is lossless for all supported providers.
