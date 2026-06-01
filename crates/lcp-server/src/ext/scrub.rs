@@ -272,10 +272,16 @@ mod tests {
         let restored_stream = ext.on_response_stream(ctx(), state, raw_stream);
         let chunks: Vec<_> = restored_stream.collect().await;
 
-        let text = String::from_utf8(chunks[0].as_ref().unwrap().to_vec()).unwrap();
+        // unscrub_stream emits the prefix ("key: ") and the restored secret as
+        // separate chunks; concatenate all to check the full restored output.
+        let all_bytes: Vec<u8> = chunks
+            .iter()
+            .flat_map(|c| c.as_ref().unwrap().to_vec())
+            .collect();
         assert!(
-            text.as_bytes().windows(ANT.len()).any(|w| w == ANT),
-            "Phase 3 must restore the real key in the response; got: {text:?}"
+            all_bytes.windows(ANT.len()).any(|w| w == ANT),
+            "Phase 3 must restore the real key in the response; got: {:?}",
+            String::from_utf8_lossy(&all_bytes)
         );
     }
 

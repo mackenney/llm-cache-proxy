@@ -15,8 +15,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | Plan | What |
 |---|---|
-| _(none)_ | |
----
+| _(future)_ | **System-prompt content normalization** — pattern-driven stripping of volatile lines (e.g. `Current date: …`, `Current working directory: …`) from system prompt content before cache key derivation. Patterns configured in `[extensions.system_prompt_scrub]` as a list of regexes applied to the system message body (Anthropic top-level `system` field or first `role:system` message). Key-only: forwarded payload is unchanged, so the model still receives real values. Motivation: agentic harnesses like pi inject the current date and CWD into every system prompt, busting the cache on every new day and every new project path. Pattern-driven design keeps lcp agnostic to any specific harness. |
 
 ## Completed
 
@@ -53,4 +52,4 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 ## Known Gaps
 
 | ID | Issue | Plan |
-|---|---|---|
+| SSE-unscrub | `unscrub_stream` uses raw-byte Aho-Corasick; fakes split across `content_block_delta` SSE events are never contiguous → Phase 3 silently passes the fake through. See `crates/lcp-server/SPEC.md §SSE-Aware Unscrubbing`. | none |
