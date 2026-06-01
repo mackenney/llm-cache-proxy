@@ -15,8 +15,6 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | Plan | What |
 |---|---|
 | _(future)_ | **System-prompt content normalization** — pattern-driven stripping of volatile lines (e.g. `Current date: …`, `Current working directory: …`) from system prompt content before cache key derivation. Patterns configured in `[extensions.system_prompt_scrub]` as a list of regexes applied to the system message body (Anthropic top-level `system` field or first `role:system` message). Key-only: forwarded payload is unchanged, so the model still receives real values. Motivation: agentic harnesses like pi inject the current date and CWD into every system prompt, busting the cache on every new day and every new project path. Pattern-driven design keeps lcp agnostic to any specific harness. |
-| [`plans/review-fixes/`](plans/review-fixes/PROGRESS.md) | **Review fixes (cr2)** — 2 blockers + 4 important + 3 suggestions from SSE-aware scrubbing code review |
-
 ## Completed
 
 ### Foundation
@@ -48,6 +46,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | cr1: code review fixes — 3 BLOCKERs, 3 IMPORTANTs, 3 perf, 3 maintenance (108→111 tests) | f93fd81 |
 | SSE-aware unscrubbing: `SseUnscrubStream` replaces raw-byte unscrub for SSE responses; text accumulated across events, fake restored; all 4 providers covered | 6d30152 |
 | Fix SSE detection for Anthropic real API: `is_sse_first_chunk` now detects `event: ` prefix; Phase 3 E2E verified live with fabricated-key roundtrip test | 6e39cc0 |
+| cr2: review fixes — frame reconstruction bug, UTF-8 chunk corruption, empty-chunk latch, partial-state error, hex crate, SPEC update, 2 new tests (159 passing) | a834725 |
 
 ---
 
@@ -55,4 +54,3 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | ID | Issue | Plan |
 | _(none)_ | | |
-| review-fixes: 2 blockers (frame reconstruction, UTF-8 chunk corruption) + 4 importants + 3 suggestions from code review; 159 tests passing | 30d1680 |
