@@ -29,14 +29,15 @@
 use std::io;
 
 use bytes::Bytes;
-use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
+use its_classified::scrub;
 use its_classified::types::{Entry, Pattern, SessionKey};
-use its_classified::{scrub, unscrub_stream};
 
 use crate::extensions::{
     Extension, ProxyCtx, ResponseStream, SensitiveState, SensitiveStateBuilder,
 };
+
+use crate::ext::sse_unscrub::SseUnscrubStream;
 
 /// Extension that scrubs detected secrets from request bodies before they are
 /// forwarded to the upstream, and restores them in the response stream.
@@ -127,7 +128,7 @@ impl Extension for ScrubExt {
     /// Phase 3: wrap the response stream in `UnscrubStream` to restore originals.
     fn on_response_stream(
         &self,
-        _ctx: ProxyCtx,
+        ctx: ProxyCtx,
         state: SensitiveState,
         stream: ResponseStream,
     ) -> ResponseStream {
@@ -152,10 +153,12 @@ impl Extension for ScrubExt {
         };
         let session_key = SessionKey::from_bytes(key_bytes);
 
-        match unscrub_stream(stream, entries, session_key) {
-            Ok(us) => Box::pin(us.map(|r| r.map_err(|e| io::Error::other(e.to_string())))),
-            Err(e) => error_stream(format!("unscrub_stream construction failed: {e}")),
-        }
+        Box::pin(SseUnscrubStream::new(
+            stream,
+            entries,
+            session_key,
+            ctx.provider,
+        ))
     }
 }
 
@@ -201,6 +204,7 @@ fn error_stream(msg: String) -> ResponseStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::StreamExt;
     use its_classified::tier1::patterns;
 
     // Synthetic test secrets matching Tier 1 structural patterns.

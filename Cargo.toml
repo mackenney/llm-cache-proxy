@@ -63,4 +63,4 @@ toml = "0.8"
 # Internal crates
 lcp-core = { path = "crates/lcp-core" }
 lcp-server = { path = "crates/lcp-server" }
-its-classified = { path = "../its-classified", features = ["async"] }
+its-classified = { git = "https://git.sr.ht/~mackenney/its-classified", features = ["async"] }

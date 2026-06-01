@@ -294,10 +294,11 @@ wire carried only fakes.
 
 ### SSE-Aware Unscrubbing
 
-> **TODO:** This section describes a known gap. The spec text below is a rough
-> description of the requirement; it will be polished when the fix is implemented.
-> Failing tests exist for the Anthropic case; tests for the remaining providers are
-> pending alongside the implementation.
+`ScrubExt::on_response_stream` MUST apply unscrubbing at the **semantic SSE text level**
+for responses where the first bytes of the stream match the `data: ` SSE prefix.
+The raw-byte Aho-Corasick approach (`unscrub_stream`) remains in use for non-SSE responses,
+where it works correctly. The two paths are selected automatically; no configuration is
+required.
 
 **Problem.** `unscrub_stream` is a raw byte-level Aho-Corasick scanner. It correctly
 restores fakes that span HTTP chunk boundaries (the fake is still a contiguous byte
@@ -332,8 +333,11 @@ unchanged — it works correctly there.
 | OpenRouter | `choices[0].delta.content` | OpenAI-compatible |
 | Gemini | `candidates[0].content.parts[0].text` | streaming generate-content response |
 
-**Current state.** `ScrubExt::on_response_stream` passes the raw byte stream directly
-to `unscrub_stream` regardless of content type. This is correct for non-SSE responses
-and broken for SSE responses. A failing integration test covers the Anthropic case
-(`unscrub_restores_secret_from_anthropic_sse_stream`). Tests for OpenAI, OpenRouter,
-and Gemini SSE formats are pending alongside the implementation.
+**Implementation.** `ScrubExt::on_response_stream` wraps the response stream in
+`SseUnscrubStream`, which auto-detects the response type by peeking at the first bytes.
+For SSE streams it buffers all frames, accumulates provider text fields across events,
+runs `unscrub_stream` on the concatenated text, then redistributes the restored text back
+into the original frames (all restored text is placed in the first text event; subsequent
+text events carry an empty string). For non-SSE streams the raw bytes are passed through
+`unscrub_stream` unchanged. Integration tests cover all four providers: Anthropic, OpenAI,
+OpenRouter (identical format to OpenAI), and Gemini.

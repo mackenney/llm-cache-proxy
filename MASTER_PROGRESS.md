@@ -8,7 +8,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | Item | Plan | Notes |
 |---|---|---|
-| _(none)_ | |
+| SSE-aware unscrubbing | [plans/sse-unscrub](./plans/sse-unscrub/PROGRESS.md) | 5-step plan; `SseUnscrubStream` replaces raw-byte unscrub for SSE responses |
 ---
 
 ## Queued
@@ -52,4 +52,4 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 ## Known Gaps
 
 | ID | Issue | Plan |
-| SSE-unscrub | `unscrub_stream` uses raw-byte Aho-Corasick; fakes split across `content_block_delta` SSE events are never contiguous → Phase 3 silently passes the fake through. See `crates/lcp-server/SPEC.md §SSE-Aware Unscrubbing`. | none |
+| _(none)_ | | |

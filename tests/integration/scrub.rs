@@ -725,3 +725,135 @@ async fn unscrub_restores_secret_from_anthropic_sse_stream() {
         "client SSE response: scrubbed fake must not be visible to client",
     );
 }
+
+#[tokio::test]
+async fn unscrub_restores_secret_from_openai_sse_stream() {
+    use its_classified::scrub as ic_scrub;
+
+    let pat = patterns::openai_classic();
+    let body_bytes = [b"key: ".as_slice(), OPENAI_CLASSIC].concat();
+    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    // Split the fake across 4 delta events.
+    let n = fake_str.len() / 4;
+    let parts = [
+        fake_str[..n].to_owned(),
+        fake_str[n..2 * n].to_owned(),
+        fake_str[2 * n..3 * n].to_owned(),
+        fake_str[3 * n..].to_owned(),
+    ];
+
+    let mut sse_chunks: Vec<String> = Vec::new();
+    for part in &parts {
+        sse_chunks.push(format!(
+            "data: {{\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{part}\"}},\"finish_reason\":null}}]}}\n\n"
+        ));
+    }
+    sse_chunks.push("data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n".to_owned());
+    sse_chunks.push("data: [DONE]\n\n".to_owned());
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"gpt-4o","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"key={}"}}]}}"#,
+        String::from_utf8_lossy(OPENAI_CLASSIC)
+    );
+
+    let resp = client
+        .post(format!(
+            "{}/openai/v1/chat/completions",
+            harness.proxy_url()
+        ))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[OPENAI_CLASSIC],
+        "client OpenAI SSE response: Phase 3 must restore original secret",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "client OpenAI SSE response: scrubbed fake must not be visible",
+    );
+}
+
+#[tokio::test]
+async fn unscrub_restores_secret_from_gemini_sse_stream() {
+    use its_classified::scrub as ic_scrub;
+
+    let pat = patterns::gcp();
+    let body_bytes = [b"key: ".as_slice(), GCP].concat();
+    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    // Split the fake across 4 delta events.
+    let n = fake_str.len() / 4;
+    let parts = [
+        fake_str[..n].to_owned(),
+        fake_str[n..2 * n].to_owned(),
+        fake_str[2 * n..3 * n].to_owned(),
+        fake_str[3 * n..].to_owned(),
+    ];
+
+    let mut sse_chunks: Vec<String> = Vec::new();
+    for part in &parts {
+        sse_chunks.push(format!(
+            "data: {{\"candidates\":[{{\"content\":{{\"parts\":[{{\"text\":\"{part}\"}}],\"role\":\"model\"}},\"finishReason\":\"STOP\",\"index\":0}}]}}\n\n"
+        ));
+    }
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"contents\":[{{\"parts\":[{{\"text\":\"key={}\"}}]}}]}}"#,
+        String::from_utf8_lossy(GCP)
+    );
+
+    let resp = client
+        .post(format!(
+            "{}/gemini/v1/models/gemini-2.5-flash:streamGenerateContent",
+            harness.proxy_url()
+        ))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[GCP],
+        "client Gemini SSE response: Phase 3 must restore original secret",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "client Gemini SSE response: scrubbed fake must not be visible",
+    );
+}
