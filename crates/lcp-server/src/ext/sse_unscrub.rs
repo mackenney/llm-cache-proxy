@@ -366,7 +366,8 @@ async fn unscrub_sse(
     while let Some(chunk) = us.next().await {
         restored_bytes.extend_from_slice(&chunk.map_err(|e| io::Error::other(e.to_string()))?);
     }
-    let restored_text = String::from_utf8_lossy(&restored_bytes).into_owned();
+    let restored_text = String::from_utf8(restored_bytes)
+        .map_err(|e| io::Error::other(format!("unscrub_stream produced non-UTF8 bytes: {e}")))?;
 
     // Step 6: Redistribute restored text. Strategy: first text event gets all
     // restored text; subsequent text events get empty string.
@@ -396,11 +397,17 @@ async fn unscrub_sse(
                 "set_text_field failed for provider {provider:?} on frame that extract_text_field accepted"
             )));
         }
-        // Re-serialize: rebuild the frame as "data: <json>\n\n".
-        // Provider SSE frames contain exactly one data line, so this round-trip
-        // is lossless for all supported providers.
+        // Re-serialize: rebuild the frame preserving non-data lines (event:, id:,
+        // retry:) from the original, then append the updated data line.
+        let prefix_lines: String = frame
+            .raw
+            .lines()
+            .filter(|l| !l.starts_with("data:"))
+            .map(|l| format!("{l}\n"))
+            .collect();
         let reconstructed = format!(
-            "data: {}\n\n",
+            "{}data: {}\n\n",
+            prefix_lines,
             serde_json::to_string(&json).map_err(|e| io::Error::other(e.to_string()))?
         );
         queue.push_back(Bytes::from(reconstructed.into_bytes()));
@@ -565,5 +572,37 @@ mod tests {
         let us = SseUnscrubStream::new(stream, vec![], session_key, Provider::Gemini);
         let out: Vec<_> = futures_util::StreamExt::collect::<Vec<_>>(us).await;
         assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sse_event_lines_preserved_through_text_frame_reconstruction() {
+        // Text frames that have an `event:` prefix line must have that line
+        // preserved in the output — reconstruction must not drop non-data fields.
+        use futures_util::stream;
+        let input = concat!(
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n"
+        );
+        let stream: ResponseStream = Box::pin(stream::once(async move {
+            Ok::<Bytes, io::Error>(Bytes::from(input.as_bytes().to_vec()))
+        }));
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let us = SseUnscrubStream::new(stream, vec![], session_key, Provider::Anthropic);
+        let out: Vec<u8> = futures_util::StreamExt::collect::<Vec<_>>(us)
+            .await
+            .into_iter()
+            .map(|r| r.unwrap())
+            .flat_map(|b| b.to_vec())
+            .collect();
+        let out_str = String::from_utf8(out).unwrap();
+        // The event: line must survive reconstruction of the text frame.
+        assert!(
+            out_str.contains("event: content_block_delta\n"),
+            "event: line was stripped from text frame; got: {out_str:?}"
+        );
+        // The message_stop frame is non-text and passes through raw — also kept.
+        assert!(out_str.contains("event: message_stop\n"));
     }
 }
