@@ -297,7 +297,10 @@ wire carried only fakes.
 ### SSE-Aware Unscrubbing
 
 `ScrubExt::on_response_stream` MUST apply unscrubbing at the **semantic SSE text level**
-for responses where the first bytes of the stream match the `data: ` SSE prefix.
+for responses where the first bytes of the stream match the `data: ` or `event: ` SSE
+prefix. Anthropic's real API starts each event with a named `event:` line (e.g.,
+`event: message_start`) before the `data:` line, so the first bytes of the stream are
+`event: ` rather than `data: `.
 The raw-byte Aho-Corasick approach (`unscrub_stream`) remains in use for non-SSE responses,
 where it works correctly. The two paths are selected automatically; no configuration is
 required.
@@ -336,7 +339,8 @@ unchanged — it works correctly there.
 | Gemini | `candidates[0].content.parts[0].text` | streaming generate-content response |
 
 **Implementation.** `ScrubExt::on_response_stream` wraps the response stream in
-`SseUnscrubStream`, which auto-detects the response type by peeking at the first bytes.
+`SseUnscrubStream`, which auto-detects the response type by peeking at the first bytes
+(detecting both `data: ` and `event: ` SSE prefixes).
 For SSE streams it buffers all frames, accumulates provider text fields across events,
 runs `unscrub_stream` on the concatenated text, then redistributes the restored text back
 into the original frames (all restored text is placed in the first text event; subsequent
