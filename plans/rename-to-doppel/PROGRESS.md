@@ -1,7 +1,7 @@
 # PROGRESS.md
 
 ## Status
-In Progress
+Complete
 
 ## Objective
 Rename the `its-classified` library to `doppel` and update all consumers in
@@ -66,9 +66,9 @@ Before dispatching any workers:
 
 ## Steps
 
-- [ ] [step-01-rename-library](./step-01-rename-library.md) — rename its-classified to doppel: crate identity, all API symbols, CLI, tests, docs
-- [ ] [step-02-rename-lcp-server-ext](./step-02-rename-lcp-server-ext.md) — rename lcp-server ext layer, Cargo deps, file names
-- [ ] [step-03-rename-lcp-cli](./step-03-rename-lcp-cli.md) — rename lcp CLI config struct, TOML keys, log messages (with backward compat)
-- [ ] [step-04-rename-tests](./step-04-rename-tests.md) — rename integration test file, imports, macros, function names
-- [ ] [step-05-update-docs](./step-05-update-docs.md) — update SPEC.md files, AGENTS.md, inline doc comments
-- [ ] [step-06-finalize-dependency](./step-06-finalize-dependency.md) — remove [patch], switch to remote git dep, clean up MASTER_PROGRESS
+- [x] [step-01-rename-library](./step-01-rename-library.md) — rename its-classified to doppel: crate identity, all API symbols, CLI, tests, docs
+- [x] [step-02-rename-lcp-server-ext](./step-02-rename-lcp-server-ext.md) — rename lcp-server ext layer, Cargo deps, file names
+- [x] [step-03-rename-lcp-cli](./step-03-rename-lcp-cli.md) — rename lcp CLI config struct, TOML keys, log messages (with backward compat)
+- [x] [step-04-rename-tests](./step-04-rename-tests.md) — rename integration test file, imports, macros, function names
+- [x] [step-05-update-docs](./step-05-update-docs.md) — update SPEC.md files, AGENTS.md, inline doc comments
+- [x] [step-06-finalize-dependency](./step-06-finalize-dependency.md) — remove [patch], switch to remote git dep, clean up MASTER_PROGRESS
