@@ -12,9 +12,11 @@
 //!   each unique secret combination gets its own cache entry.
 //! - **Phase 2:** `its_classified::scrub` replaces secrets with fakes.  The
 //!   `Entry` set and session key are placed in `SensitiveState` for Phase 3.
-//! - **Phase 3:** `its_classified::unscrub_stream` restores originals in every
-//!   response chunk.  The cache stores the restored content; the wire carried
-//!   only fakes.
+//! - **Phase 3:** For SSE responses, `SseUnscrubStream` performs semantic-level
+//!   unscrubbing (accumulate text across events, unscrub, redistribute). For
+//!   non-SSE responses, `its_classified::unscrub_stream` performs raw-byte
+//!   Aho-Corasick restoration. The cache stores restored content; the wire
+//!   carried only fakes.
 //!
 //! # SensitiveState layout (per request)
 //!
@@ -115,7 +117,7 @@ impl Extension for ScrubExt {
             let entries_str = String::from_utf8(entries_json)
                 .map_err(|e| anyhow::anyhow!("entries JSON is not UTF-8: {e}"))?;
 
-            let key_hex = encode_key_hex(result.session_key.as_bytes());
+            let key_hex = hex::encode(result.session_key.as_bytes());
 
             let mut builder = SensitiveStateBuilder::new();
             builder.set("entries", &entries_str);
@@ -138,7 +140,7 @@ impl Extension for ScrubExt {
             return stream;
         };
         let Some(key_hex) = state.get("session_key").map(str::to_owned) else {
-            return stream;
+            return error_stream("SensitiveState has entries but no session_key".into());
         };
         drop(state);
 
@@ -147,7 +149,10 @@ impl Extension for ScrubExt {
             Err(e) => return error_stream(format!("entries deserialization failed: {e}")),
         };
 
-        let key_bytes = match decode_key_hex(&key_hex) {
+        let key_bytes: [u8; 32] = match hex::decode(&key_hex)
+            .map_err(|e| e.to_string())
+            .and_then(|v| v.try_into().map_err(|_| "expected 32 bytes".to_owned()))
+        {
             Ok(b) => b,
             Err(e) => return error_stream(format!("session key decode failed: {e}")),
         };
@@ -159,38 +164,6 @@ impl Extension for ScrubExt {
             session_key,
             ctx.provider,
         ))
-    }
-}
-
-/// Encode 32 key bytes as 64 lowercase hex characters.
-fn encode_key_hex(bytes: &[u8; 32]) -> String {
-    bytes.iter().fold(String::with_capacity(64), |mut s, b| {
-        use std::fmt::Write;
-        let _ = write!(s, "{b:02x}");
-        s
-    })
-}
-
-/// Decode 64 lowercase hex characters back into 32 bytes.
-fn decode_key_hex(hex: &str) -> Result<[u8; 32], String> {
-    if hex.len() != 64 {
-        return Err(format!("expected 64 hex chars, got {}", hex.len()));
-    }
-    let mut out = [0u8; 32];
-    for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
-        let hi = hex_nibble(chunk[0])?;
-        let lo = hex_nibble(chunk[1])?;
-        out[i] = (hi << 4) | lo;
-    }
-    Ok(out)
-}
-
-fn hex_nibble(b: u8) -> Result<u8, String> {
-    match b {
-        b'0'..=b'9' => Ok(b - b'0'),
-        b'a'..=b'f' => Ok(b - b'a' + 10),
-        b'A'..=b'F' => Ok(b - b'A' + 10),
-        _ => Err(format!("invalid hex byte: {b:#x}")),
     }
 }
 
@@ -308,18 +281,6 @@ mod tests {
         let chunks: Vec<_> = out_stream.collect().await;
         let text = chunks[0].as_ref().unwrap();
         assert_eq!(text.as_ref(), b"response");
-    }
-
-    #[test]
-    fn key_hex_round_trip() {
-        let mut bytes = [0u8; 32];
-        for (i, b) in bytes.iter_mut().enumerate() {
-            *b = i as u8;
-        }
-        let hex = encode_key_hex(&bytes);
-        assert_eq!(hex.len(), 64);
-        let decoded = decode_key_hex(&hex).unwrap();
-        assert_eq!(decoded, bytes);
     }
 
     #[tokio::test]

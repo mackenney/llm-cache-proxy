@@ -20,6 +20,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
 its-classified = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
