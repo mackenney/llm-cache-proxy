@@ -310,7 +310,7 @@ restores fakes that span HTTP chunk boundaries (the fake is still a contiguous b
 sequence across chunk edges). It does NOT work for SSE streaming responses.
 
 When an upstream sends `content-type: text/event-stream`, text content is delivered
-token-by-token inside individual `data:` events. If a scrubbed fake key is echoed back
+token-by-token inside individual `data:` events. If a swapped fake key is echoed back
 by the model, each event carries only a fragment of the fake, separated from the next
 fragment by SSE framing bytes (`}\n\ndata: {…`). The full fake key never appears as
 a contiguous byte sequence in the raw stream, so Aho-Corasick never matches it. Phase 3

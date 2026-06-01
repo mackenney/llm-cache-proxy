@@ -2,23 +2,23 @@
 //!
 //! Exercises `DoppelExt` (backed by `doppel`) end-to-end through the
 //! proxy pipeline:
-//!   - Phase 2: `doppel::scrub` replaces real secrets with fakes before
+//!   - Phase 2: `doppel::swap` replaces real secrets with fakes before
 //!     the upstream sees the body.
-//!   - Phase 3: `doppel::unscrub_stream` restores originals in the
+//!   - Phase 3: `doppel::restore_stream` restores originals in the
 //!     response stream before the response is cached and returned.
 //!
 //! SPEC ref: lcp-server/SPEC.md §Pipeline and Cache Interaction
 //!   "For a swap/restore extension pair, Phase 3 restores the original bytes,
 //!    so the cache stores originals while the wire carried only fakes."
 
-use doppel::{register, patterns};
-use lcp_server::{ExtensionPipeline, DoppelExt};
+use doppel::{patterns, register};
+use lcp_server::{DoppelExt, ExtensionPipeline};
 
 use crate::common::{MockUpstream, TestHarness};
 
 // ---------------------------------------------------------------------------
 // Synthetic test secrets — NOT real credentials.
-// Structures match the built-in patterns of its-classified exactly.
+// Structures match the built-in patterns of doppel exactly.
 // ---------------------------------------------------------------------------
 
 /// Anthropic API key (sk-ant-api03-…)
@@ -122,11 +122,7 @@ macro_rules! wire_doppel_test {
     };
 }
 
-wire_doppel_test!(
-    wire_anthropic_key_swapped,
-    ANT,
-    vec![patterns::anthropic()]
-);
+wire_doppel_test!(wire_anthropic_key_swapped, ANT, vec![patterns::anthropic()]);
 wire_doppel_test!(
     wire_openai_classic_key_swapped,
     OPENAI_CLASSIC,
@@ -203,7 +199,7 @@ async fn wire_openai_project_key_swapped() {
 }
 
 // ---------------------------------------------------------------------------
-// Multiple Tier 1 secrets in the same payload — all scrubbed
+// Multiple secrets in the same payload — all swapped
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -344,7 +340,7 @@ async fn wire_unregistered_secret_passes_through() {
     assert_absent(
         upstream_body,
         &[ANT],
-        "upstream body (registered secret must be scrubbed)",
+        "upstream body (registered secret must be swapped)",
     );
     assert_present(
         upstream_body,
@@ -466,7 +462,7 @@ async fn sse_cache_stores_restored_content_not_fake() {
     let fake_bytes = sr.entries[0].fake.clone();
     let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
 
-    // Split the fake across 2 delta events to trigger SSE unscrubbing.
+    // Split the fake across 2 delta events to trigger SSE restore.
     let mid = fake_str.len() / 2;
     let (p1, p2) = (&fake_str[..mid], &fake_str[mid..]);
     let sse_chunks = vec![
@@ -709,7 +705,7 @@ async fn clean_payload_passes_through_unmodified() {
 
 #[tokio::test]
 async fn restore_returns_secret_from_anthropic_sse_stream() {
-    // SPEC ref: crates/lcp-server/SPEC.md §SSE-Aware Unscrubbing
+    // SPEC ref: crates/lcp-server/SPEC.md §SSE-Aware Restore
     use doppel::swap as doppel_swap;
 
     // Use the same Pattern instance for both pre-computation and DoppelExt so the
@@ -785,7 +781,7 @@ async fn restore_returns_secret_from_anthropic_sse_stream() {
     assert_absent(
         &resp_bytes,
         &[&fake_bytes],
-        "client SSE response: scrubbed fake must not be visible to client",
+        "client SSE response: swapped fake must not be visible to client",
     );
 }
 
@@ -793,7 +789,7 @@ async fn restore_returns_secret_from_anthropic_sse_stream() {
 async fn restore_returns_secret_from_anthropic_sse_stream_with_event_prefix() {
     // Regression test: Anthropic's real API prefixes every data line with an
     // event: line. The SSE detector must recognize `event: ` as SSE, and the
-    // unscrub pipeline must handle the event: prefix lines correctly.
+    // restore pipeline must handle the event: prefix lines correctly.
     use doppel::swap as doppel_swap;
 
     let pat = patterns::anthropic();
@@ -865,7 +861,7 @@ async fn restore_returns_secret_from_anthropic_sse_stream_with_event_prefix() {
     assert_absent(
         &resp_bytes,
         &[&fake_bytes],
-        "client SSE response: scrubbed fake must not be visible to client",
+        "client SSE response: swapped fake must not be visible to client",
     );
 }
 
@@ -932,7 +928,7 @@ async fn restore_returns_secret_from_openai_sse_stream() {
     assert_absent(
         &resp_bytes,
         &[&fake_bytes],
-        "client OpenAI SSE response: scrubbed fake must not be visible",
+        "client OpenAI SSE response: swapped fake must not be visible",
     );
 }
 
@@ -997,14 +993,14 @@ async fn restore_returns_secret_from_gemini_sse_stream() {
     assert_absent(
         &resp_bytes,
         &[&fake_bytes],
-        "client Gemini SSE response: scrubbed fake must not be visible",
+        "client Gemini SSE response: swapped fake must not be visible",
     );
 }
 
 #[tokio::test]
 async fn restore_returns_secret_from_openrouter_sse_stream() {
     // OpenRouter uses the same wire format as OpenAI (choices[0].delta.content).
-    // SPEC ref: crates/lcp-server/SPEC.md §SSE-Aware Unscrubbing
+    // SPEC ref: crates/lcp-server/SPEC.md §SSE-Aware Restore
     use doppel::swap as doppel_swap;
 
     let pat = patterns::openai_classic();

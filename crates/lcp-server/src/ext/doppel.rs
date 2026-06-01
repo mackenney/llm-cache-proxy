@@ -31,9 +31,9 @@
 use std::io;
 
 use bytes::Bytes;
-use futures_util::future::BoxFuture;
 use doppel::swap;
 use doppel::{Entry, Pattern, SessionKey};
+use futures_util::future::BoxFuture;
 
 use crate::extensions::{
     Extension, ProxyCtx, ResponseStream, SensitiveState, SensitiveStateBuilder,
@@ -136,7 +136,7 @@ impl Extension for DoppelExt {
     ) -> ResponseStream {
         // Recover entries JSON and session key hex from SensitiveState.
         let Some(entries_json) = state.get("entries").map(|s| s.as_bytes().to_vec()) else {
-            // No secrets were scrubbed — pass stream through unchanged.
+            // No secrets were swapped — pass stream through unchanged.
             return stream;
         };
         let Some(key_hex) = state.get("session_key").map(str::to_owned) else {
@@ -177,8 +177,8 @@ fn error_stream(msg: String) -> ResponseStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::StreamExt;
     use doppel::patterns;
+    use futures_util::StreamExt;
 
     // Synthetic test secrets matching Tier 1 structural patterns.
     // These are NOT real credentials.

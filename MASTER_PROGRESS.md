@@ -6,10 +6,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 ## In Progress
 
-| Item | Plan | Notes |
-|---|---|---|
-| **rename-to-doppel** | [plans/rename-to-doppel](./plans/rename-to-doppel/PROGRESS.md) | Rename `doppel` → `doppel`, `swap/restore` → `swap/restore`, all dependent types and files |
----
+_(none)_
 
 ## Queued
 
@@ -36,7 +33,8 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | What | Ref |
 |---|---|
 | `rename-to-doppel` — rename `its-classified` → `doppel`, `swap`/`restore` verbs, `SecretsFile`, `DoppelExt` throughout | 887d985 |
-
+| `rename-to-doppel` — rename `its-classified` → `doppel`, `swap`/`restore` verbs, `SecretsFile`, `DoppelExt` throughout | 887d985 |
+| fix: stale scrub/unscrub vocabulary in docs, tests, CLI strings, SPEC.md | 253ffa1 |
 
 | What | Ref |
 |---|---|
