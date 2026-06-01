@@ -55,3 +55,4 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 | ID | Issue | Plan |
 | _(none)_ | | |
+| review-fixes: 2 blockers (frame reconstruction, UTF-8 chunk corruption) + 4 importants + 3 suggestions from code review; 159 tests passing | 30d1680 |
