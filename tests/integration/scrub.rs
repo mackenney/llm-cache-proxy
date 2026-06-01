@@ -790,6 +790,86 @@ async fn unscrub_restores_secret_from_anthropic_sse_stream() {
 }
 
 #[tokio::test]
+async fn unscrub_restores_secret_from_anthropic_sse_stream_with_event_prefix() {
+    // Regression test: Anthropic's real API prefixes every data line with an
+    // event: line. The SSE detector must recognize `event: ` as SSE, and the
+    // unscrub pipeline must handle the event: prefix lines correctly.
+    use its_classified::scrub as ic_scrub;
+
+    let pat = patterns::anthropic();
+    let body_bytes = [b"key: ".as_slice(), ANT].concat();
+    let sr = ic_scrub(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    let n = fake_str.len() / 4;
+    let parts = [
+        fake_str[..n].to_owned(),
+        fake_str[n..2 * n].to_owned(),
+        fake_str[2 * n..3 * n].to_owned(),
+        fake_str[3 * n..].to_owned(),
+    ];
+
+    let mut sse_chunks: Vec<String> = vec![
+        format!(
+            "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null}}}}\n\n"
+        ),
+        format!(
+            "event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n"
+        ),
+    ];
+    for part in &parts {
+        sse_chunks.push(format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{part}\"}}}}\n\n"
+        ));
+    }
+    sse_chunks.push(
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"
+            .to_owned(),
+    );
+    sse_chunks.push(
+        "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n"
+            .to_owned(),
+    );
+    sse_chunks.push("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_owned());
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(ScrubExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"claude-haiku-4-5","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"key={}"}}]}}"#,
+        String::from_utf8_lossy(ANT)
+    );
+
+    let resp = client
+        .post(format!("{}/anthropic/v1/messages", harness.proxy_url()))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[ANT],
+        "client SSE response: Phase 3 must restore original secret from event-prefixed stream",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "client SSE response: scrubbed fake must not be visible to client",
+    );
+}
+
+#[tokio::test]
 async fn unscrub_restores_secret_from_openai_sse_stream() {
     use its_classified::scrub as ic_scrub;
 

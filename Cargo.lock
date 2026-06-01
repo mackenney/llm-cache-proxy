@@ -1212,6 +1212,7 @@ dependencies = [
  "axum",
  "bytes",
  "futures-util",
+ "hex",
  "its-classified",
  "lcp-core",
  "reqwest",

@@ -15,6 +15,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | Plan | What |
 |---|---|
 | _(future)_ | **System-prompt content normalization** — pattern-driven stripping of volatile lines (e.g. `Current date: …`, `Current working directory: …`) from system prompt content before cache key derivation. Patterns configured in `[extensions.system_prompt_scrub]` as a list of regexes applied to the system message body (Anthropic top-level `system` field or first `role:system` message). Key-only: forwarded payload is unchanged, so the model still receives real values. Motivation: agentic harnesses like pi inject the current date and CWD into every system prompt, busting the cache on every new day and every new project path. Pattern-driven design keeps lcp agnostic to any specific harness. |
+| [`plans/review-fixes/`](plans/review-fixes/PROGRESS.md) | **Review fixes (cr2)** — 2 blockers + 4 important + 3 suggestions from SSE-aware scrubbing code review |
 
 ## Completed
 

@@ -618,12 +618,23 @@ mod tests {
             .flat_map(|b| b.to_vec())
             .collect();
         let out_str = String::from_utf8(out).unwrap();
-        // The event: line must survive reconstruction of the text frame.
+        // Each event: + data: pair must be in the same SSE frame (no \n\n between them).
+        let frames: Vec<&str> = out_str.split("\n\n").filter(|f| !f.is_empty()).collect();
+        let text_frame = frames
+            .iter()
+            .find(|f| f.contains("content_block_delta"))
+            .expect("must have a content_block_delta frame");
         assert!(
-            out_str.contains("event: content_block_delta\n"),
-            "event: line was stripped from text frame; got: {out_str:?}"
+            text_frame.contains("event: content_block_delta\n") && text_frame.contains("data: "),
+            "event: and data: must be in the same frame; got: {text_frame:?}"
         );
-        // The message_stop frame is non-text and passes through raw — also kept.
-        assert!(out_str.contains("event: message_stop\n"));
+        let stop_frame = frames
+            .iter()
+            .find(|f| f.contains("message_stop"))
+            .expect("must have a message_stop frame");
+        assert!(
+            stop_frame.contains("event: message_stop\n") && stop_frame.contains("data: "),
+            "event: and data: must be in the same frame; got: {stop_frame:?}"
+        );
     }
 }
