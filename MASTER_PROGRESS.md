@@ -46,6 +46,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 | ext-1: Extension pipeline — Phase 1/2/3 hooks, SensitiveState opaque store, proxy wiring, 10 spec invariant tests (99→108 tests) | be99fd3 |
 | cr1: code review fixes — 3 BLOCKERs, 3 IMPORTANTs, 3 perf, 3 maintenance (108→111 tests) | f93fd81 |
 | SSE-aware unscrubbing: `SseUnscrubStream` replaces raw-byte unscrub for SSE responses; text accumulated across events, fake restored; all 4 providers covered | 6d30152 |
+| Fix SSE detection for Anthropic real API: `is_sse_first_chunk` now detects `event: ` prefix; Phase 3 E2E verified live with fabricated-key roundtrip test | 6e39cc0 |
 
 ---
 
