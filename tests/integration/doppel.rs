@@ -1940,3 +1940,206 @@ async fn passthrough_gemini_metadata_fields() {
         "groundingMetadata must pass through unchanged (still contains fake)",
     );
 }
+
+#[tokio::test]
+async fn cross_field_isolation_openai_content_and_tool_calls() {
+    // VC-SSE-13: Two independent secrets in separate SSE content fields must be
+    // restored independently — content field uses OPENAI_CLASSIC, tool_calls uses
+    // GITHUB_CLASSIC.
+    use doppel::swap as doppel_swap;
+
+    let pat1 = patterns::openai_classic();
+    let secret1 = OPENAI_CLASSIC;
+    let body1 = [b"key: ".as_slice(), secret1].concat();
+    let sr1 = doppel_swap(&body1, std::slice::from_ref(&pat1)).unwrap();
+    let fake1 = sr1.entries[0].fake.clone();
+    let fake1_str = String::from_utf8_lossy(&fake1).into_owned();
+
+    let pat2 = patterns::github_classic();
+    let secret2 = GITHUB_CLASSIC;
+    let body2 = [b"token: ".as_slice(), secret2].concat();
+    let sr2 = doppel_swap(&body2, std::slice::from_ref(&pat2)).unwrap();
+    let fake2 = sr2.entries[0].fake.clone();
+    let fake2_str = String::from_utf8_lossy(&fake2).into_owned();
+
+    let mid1 = fake1_str.len() / 2;
+    let (c1, c2) = (&fake1_str[..mid1], &fake1_str[mid1..]);
+    let mid2 = fake2_str.len() / 2;
+    let (t1, t2) = (&fake2_str[..mid2], &fake2_str[mid2..]);
+
+    let sse_chunks = vec![
+        format!(
+            concat!(
+                "data: {{\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",",
+                "\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,",
+                "\"delta\":{{\"content\":\"{c1}\"}},\"finish_reason\":null}}]}}\n\n"
+            ),
+            c1 = c1
+        ),
+        format!(
+            concat!(
+                "data: {{\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",",
+                "\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,",
+                "\"delta\":{{\"content\":\"{c2}\"}},\"finish_reason\":null}}]}}\n\n"
+            ),
+            c2 = c2
+        ),
+        // tool_calls init: empty arguments, not accumulated.
+        concat!(
+            "data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",",
+            "\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":null,",
+            "\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",",
+            "\"function\":{\"name\":\"fn1\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n"
+        ).to_owned(),
+        format!(
+            concat!(
+                "data: {{\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",",
+                "\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,",
+                "\"delta\":{{\"tool_calls\":[{{\"index\":0,",
+                "\"function\":{{\"arguments\":\"{t1}\"}}}}]}},\"finish_reason\":null}}]}}\n\n"
+            ),
+            t1 = t1
+        ),
+        format!(
+            concat!(
+                "data: {{\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",",
+                "\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,",
+                "\"delta\":{{\"tool_calls\":[{{\"index\":0,",
+                "\"function\":{{\"arguments\":\"{t2}\"}}}}]}},\"finish_reason\":null}}]}}\n\n"
+            ),
+            t2 = t2
+        ),
+        "data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n".to_owned(),
+        "data: [DONE]\n\n".to_owned(),
+    ];
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat1, pat2])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"gpt-4o","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"key={k} token={t}"}}]}}"#,
+        k = String::from_utf8_lossy(secret1),
+        t = String::from_utf8_lossy(secret2)
+    );
+
+    let resp = client
+        .post(format!(
+            "{}/openai/v1/chat/completions",
+            harness.proxy_url()
+        ))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[secret1],
+        "content field: original must be restored",
+    );
+    assert_present(
+        &resp_bytes,
+        &[secret2],
+        "tool_calls field: original must be restored",
+    );
+    assert_absent(&resp_bytes, &[&fake1, &fake2], "no fakes in output");
+}
+
+#[tokio::test]
+async fn cross_field_isolation_anthropic_text_and_thinking() {
+    // VC-SSE-13: Two independent secrets in separate Anthropic SSE fields must be
+    // restored independently — thinking_delta (index 0) uses ANT, text_delta
+    // (index 1) uses GITHUB_CLASSIC.
+    use doppel::swap as doppel_swap;
+
+    let pat1 = patterns::anthropic();
+    let secret1 = ANT;
+    let body1 = [b"key: ".as_slice(), secret1].concat();
+    let sr1 = doppel_swap(&body1, std::slice::from_ref(&pat1)).unwrap();
+    let fake1 = sr1.entries[0].fake.clone();
+    let fake1_str = String::from_utf8_lossy(&fake1).into_owned();
+
+    let pat2 = patterns::github_classic();
+    let secret2 = GITHUB_CLASSIC;
+    let body2 = [b"token: ".as_slice(), secret2].concat();
+    let sr2 = doppel_swap(&body2, std::slice::from_ref(&pat2)).unwrap();
+    let fake2 = sr2.entries[0].fake.clone();
+    let fake2_str = String::from_utf8_lossy(&fake2).into_owned();
+
+    let mid1 = fake1_str.len() / 2;
+    let (th1, th2) = (&fake1_str[..mid1], &fake1_str[mid1..]);
+    let mid2 = fake2_str.len() / 2;
+    let (tx1, tx2) = (&fake2_str[..mid2], &fake2_str[mid2..]);
+
+    let sse_chunks = vec![
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null}}\n\n".to_owned(),
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n".to_owned(),
+        format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"thinking_delta\",\"thinking\":\"{th1}\"}}}}\n\n",
+            th1 = th1
+        ),
+        format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"thinking_delta\",\"thinking\":\"{th2}\"}}}}\n\n",
+            th2 = th2
+        ),
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n".to_owned(),
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n".to_owned(),
+        format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{tx1}\"}}}}\n\n",
+            tx1 = tx1
+        ),
+        format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{tx2}\"}}}}\n\n",
+            tx2 = tx2
+        ),
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n".to_owned(),
+        "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n".to_owned(),
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_owned(),
+    ];
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat1, pat2])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"claude-haiku-4-5","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"key={k} tok={t}"}}]}}"#,
+        k = String::from_utf8_lossy(secret1),
+        t = String::from_utf8_lossy(secret2)
+    );
+
+    let resp = client
+        .post(format!("{}/anthropic/v1/messages", harness.proxy_url()))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[secret1],
+        "thinking field: original must be restored",
+    );
+    assert_present(
+        &resp_bytes,
+        &[secret2],
+        "text field: original must be restored",
+    );
+    assert_absent(&resp_bytes, &[&fake1, &fake2], "no fakes in output");
+}
