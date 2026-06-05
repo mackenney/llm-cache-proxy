@@ -274,13 +274,12 @@ async fn e2e_openai_tool_calls() {
     );
 }
 
-// e2e_openai_reasoning_content: Exercises the reasoning_content SSE field by using
-// o4-mini with a tool call. The proxy must correctly restore secrets that appear in
-// the tool_calls arguments of a reasoning model's streaming response.
+// e2e_openai_o4mini_tool_calls: Exercises tool_calls SSE restore on o4-mini.
+// The model streams tool_calls arguments which DoppelExt must restore.
 // Note: o4-mini does not expose reasoning_content in Chat Completions streaming;
 // the integration tests cover Phase 3 handling of that field synthetically.
 #[tokio::test]
-async fn e2e_openai_reasoning_content() {
+async fn e2e_openai_o4mini_tool_calls() {
     let Some(api_key) = require_env("OPENAI_API_KEY") else {
         return;
     };
@@ -341,12 +340,12 @@ async fn e2e_openai_reasoning_content() {
     assert_present(
         &resp_bytes,
         &[OPENAI_CLASSIC],
-        "openai_reasoning_content: original secret in tool_calls (o4-mini)",
+        "openai_o4mini_tool_calls: original secret in tool_calls (o4-mini)",
     );
     assert_absent(
         &resp_bytes,
         &[&fake_bytes],
-        "openai_reasoning_content: fake absent",
+        "openai_o4mini_tool_calls: fake absent",
     );
 }
 

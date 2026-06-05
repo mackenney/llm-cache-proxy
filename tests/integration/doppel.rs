@@ -2179,3 +2179,90 @@ async fn restore_openai_refusal() {
         "refusal: swapped fake must not be visible to client",
     );
 }
+
+
+#[tokio::test]
+async fn restore_openai_tool_calls_multi_index() {
+    // VC-SSE-4: tool_calls accumulation is keyed per-index; two concurrent tool calls
+    // with different indices must each restore independently.
+    use doppel::swap as doppel_swap;
+
+    let pat1 = patterns::openai_classic();
+    let body1 = [b"key: ".as_slice(), OPENAI_CLASSIC].concat();
+    let sr1 = doppel_swap(&body1, std::slice::from_ref(&pat1)).unwrap();
+    let fake1_bytes = sr1.entries[0].fake.clone();
+    let fake1_str = String::from_utf8_lossy(&fake1_bytes).into_owned();
+
+    let pat2 = patterns::github_classic();
+    let body2 = [b"token: ".as_slice(), GITHUB_CLASSIC].concat();
+    let sr2 = doppel_swap(&body2, std::slice::from_ref(&pat2)).unwrap();
+    let fake2_bytes = sr2.entries[0].fake.clone();
+    let fake2_str = String::from_utf8_lossy(&fake2_bytes).into_owned();
+
+    let sse_chunks = vec![
+        // Init frame: two tool calls announced, empty arguments
+        format!(concat!(
+            "data: {{\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",",
+            "\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,\"delta\":{{\"role\":\"assistant\",",
+            "\"tool_calls\":[{{\"index\":0,\"id\":\"call_0\",\"type\":\"function\",\"function\":{{\"name\":\"fn0\",\"arguments\":\"\"}} }},",
+            "{{\"index\":1,\"id\":\"call_1\",\"type\":\"function\",\"function\":{{\"name\":\"fn1\",\"arguments\":\"\"}} }}]}},",
+            "\"finish_reason\":null}}]}}\n\n"
+        )),
+        // Arguments for tool call 0 (fake1)
+        format!(concat!(
+            "data: {{\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",",
+            "\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,\"delta\":{{",
+            "\"tool_calls\":[{{\"index\":0,\"function\":{{\"arguments\":\"{fake1_str}\"}}}}]}},",
+            "\"finish_reason\":null}}]}}\n\n"
+        ), fake1_str = fake1_str),
+        // Arguments for tool call 1 (fake2)
+        format!(concat!(
+            "data: {{\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",",
+            "\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,\"delta\":{{",
+            "\"tool_calls\":[{{\"index\":1,\"function\":{{\"arguments\":\"{fake2_str}\"}}}}]}},",
+            "\"finish_reason\":null}}]}}\n\n"
+        ), fake2_str = fake2_str),
+        "data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n".to_owned(),
+        "data: [DONE]\n\n".to_owned(),
+    ];
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat1, pat2])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"gpt-4o","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"keys={} {}"}}]}}"#,
+        String::from_utf8_lossy(OPENAI_CLASSIC),
+        String::from_utf8_lossy(GITHUB_CLASSIC)
+    );
+
+    let resp = client
+        .post(format!(
+            "{}/openai/v1/chat/completions",
+            harness.proxy_url()
+        ))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[OPENAI_CLASSIC],
+        "tool_calls index 0: original must be restored",
+    );
+    assert_present(
+        &resp_bytes,
+        &[GITHUB_CLASSIC],
+        "tool_calls index 1: original must be restored",
+    );
+    assert_absent(&resp_bytes, &[&fake1_bytes, &fake2_bytes], "both fakes must be absent");
+}
