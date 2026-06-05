@@ -48,4 +48,4 @@ Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, 
 
 ## Known Gaps
 
-_(none)_
+- **OpenAI Responses API `response.completed` event leaks fake** — the final `response.completed` event body contains the fake key because `extract_fields` does not extract from non-delta/done event types; `e2e_openai_responses_api` intentionally omits `assert_absent` for this reason. Low-priority: the secret is already restored in all `delta`/`done` events.
