@@ -93,12 +93,15 @@ struct FrameFieldContribution {
 
 /// Returns `true` if the first bytes of a response chunk look like an SSE stream.
 ///
-/// Detects both `data: ` and `event: ` line starters. Providers that emit only
-/// `data:` lines (OpenAI, OpenRouter, Gemini) start with `data: `; Anthropic's
-/// real API prefixes each data line with a named `event:` line, so the stream
-/// starts with `event: ` instead. Non-SSE JSON responses begin with `{`.
+/// Detects `data: `, `event: `, and `: ` (SSE comment) line starters. Anthropic's
+/// real API prefixes each data line with a named `event:` line. OpenRouter prefixes
+/// the stream with a `\`: OPENROUTER PROCESSING` comment before any data lines.
+/// Non-SSE JSON responses begin with `{` or `[`.
 pub fn is_sse_first_chunk(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"data: ") || bytes.starts_with(b"event: ")
+    bytes.starts_with(b"data: ")
+        || bytes.starts_with(b"event: ")
+        || bytes.starts_with(b": ")  // SSE comment line (e.g., OpenRouter)
+        || bytes.starts_with(b":\n") // empty SSE comment
 }
 
 /// Returns the provider-specific content fields from a parsed SSE event JSON.
