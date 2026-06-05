@@ -49,3 +49,5 @@ Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, 
 ## Known Gaps
 
 - **OpenAI Responses API `response.completed` event leaks fake** — the final `response.completed` event body contains the fake key because `extract_fields` does not extract from non-delta/done event types; `e2e_openai_responses_api` intentionally omits `assert_absent` for this reason. Low-priority: the secret is already restored in all `delta`/`done` events.
+- **Responses API `response.reasoning_summary_text.done` unhandled** — SPEC only mandates `.delta` for reasoning summary; if OpenAI emits a `.done` event with the full reasoning text containing a fake, it leaks. Low-priority: no MUST requirement covers this event type.
+- **Gemini `GeminiText` same-thought multi-event accumulation** — `GeminiText { thought: bool }` accumulates all same-thought text parts into one buffer; if two separate streaming events each deliver a non-thought text part, the second frame's `parts[N].text` is written as empty string after restoration. Current Gemini streaming never does this. Outside VC-SSE-9 scope.
