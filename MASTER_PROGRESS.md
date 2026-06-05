@@ -6,10 +6,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 ## In Progress
 
-### SSE field coverage gaps — all 4 providers
-
-Extend `extract_text_field`/`set_text_field` to cover all content-bearing SSE delta fields: Anthropic `thinking_delta`/`input_json_delta`, OpenAI `tool_calls` args/`reasoning_content`/`function_call.arguments`, Responses API full event schema, Gemini multi-part text/`codeExecutionResult`/`functionCall.args`. Introduces `FieldKey` multi-buffer architecture. 7-wave plan with E2E tests for all providers. → `plans/sse-field-coverage/`
-
+_(none)_
 ## Queued
 
 ### System-prompt cache-key normalization
@@ -43,6 +40,7 @@ Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, 
 - SSE-aware restoring: `SseRestoreStream` replaces raw-byte restore; all 4 providers covered — 6d30152
 - Fix SSE detection for Anthropic real API: `is_sse_first_chunk` detects `event: ` prefix; E2E verified — 6e39cc0
 - Code review fixes: frame reconstruction bug, UTF-8 chunk corruption, empty-chunk latch, partial-state error, hex crate, SPEC update (159 tests) — a834725
+- SSE multi-buffer field coverage: FieldKey/ExtractedField architecture, VC-SSE-1..13 (all providers), 3-round code review, E2E verified vs real APIs — cdf8fc5
 
 ---
 
