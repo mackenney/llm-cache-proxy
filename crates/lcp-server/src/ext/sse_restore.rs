@@ -33,6 +33,7 @@ enum FieldKey {
     OpenAiToolCall { index: u64 },
     OpenAiReasoning,
     OpenAiFunctionCallArgs,
+    OpenAiRefusal,
     // OpenAI Responses API
     ResponsesApiDelta { event_type: String },
     ResponsesApiDone { event_type: String },
@@ -69,6 +70,8 @@ enum WriteBackInfo {
     OpenAiReasoning,
     /// OpenAI: `json["choices"][0]["delta"]["function_call"]["arguments"]`
     OpenAiFunctionCallArgs,
+    /// OpenAI: `json["choices"][0]["delta"]["refusal"]`
+    OpenAiRefusal,
     /// Responses API: `json["delta"]`
     ResponsesApiDelta,
     /// Responses API: `json["text"]`
@@ -175,17 +178,78 @@ fn extract_fields(
             }
         }
         Provider::OpenAi | Provider::OpenRouter => {
-            let Some(text) = json
-                .pointer("/choices/0/delta/content")
-                .and_then(Value::as_str)
-            else {
-                return vec![];
+            // Responses API events are handled separately — guard on event_type.
+            // (This is a no-op until step-04 adds Responses API support;
+            // the guard is here so step-04 only needs to add the else-branch.)
+            if _event_type.is_some_and(|e| e.starts_with("response.")) {
+                return vec![]; // Handled in step-04
+            }
+
+            let delta = match json.pointer("/choices/0/delta") {
+                Some(d) => d,
+                None => return vec![],
             };
-            vec![ExtractedField {
-                key: FieldKey::OpenAiContent,
-                text: text.to_owned(),
-                write_back: WriteBackInfo::OpenAiContent,
-            }]
+
+            let mut fields = Vec::new();
+
+            if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
+                fields.push(ExtractedField {
+                    key: FieldKey::OpenAiContent,
+                    text: text.to_owned(),
+                    write_back: WriteBackInfo::OpenAiContent,
+                });
+            }
+
+            if let Some(text) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
+                fields.push(ExtractedField {
+                    key: FieldKey::OpenAiReasoning,
+                    text: text.to_owned(),
+                    write_back: WriteBackInfo::OpenAiReasoning,
+                });
+            }
+
+            if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                for (array_pos, tc) in tool_calls.iter().enumerate() {
+                    let tc_index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+                    if let Some(args) = tc
+                        .get("function")
+                        .and_then(|f| f.get("arguments"))
+                        .and_then(|a| a.as_str())
+                    {
+                        if !args.is_empty() {
+                            fields.push(ExtractedField {
+                                key: FieldKey::OpenAiToolCall { index: tc_index },
+                                text: args.to_owned(),
+                                write_back: WriteBackInfo::OpenAiToolCall { array_pos },
+                            });
+                        }
+                    }
+                }
+            }
+
+            if let Some(args) = delta
+                .get("function_call")
+                .and_then(|f| f.get("arguments"))
+                .and_then(|a| a.as_str())
+            {
+                if !args.is_empty() {
+                    fields.push(ExtractedField {
+                        key: FieldKey::OpenAiFunctionCallArgs,
+                        text: args.to_owned(),
+                        write_back: WriteBackInfo::OpenAiFunctionCallArgs,
+                    });
+                }
+            }
+
+            if let Some(text) = delta.get("refusal").and_then(|v| v.as_str()) {
+                fields.push(ExtractedField {
+                    key: FieldKey::OpenAiRefusal,
+                    text: text.to_owned(),
+                    write_back: WriteBackInfo::OpenAiRefusal,
+                });
+            }
+
+            fields
         }
         Provider::Gemini => {
             let Some(text) = json
@@ -288,6 +352,21 @@ fn apply_restored_fields(
                         "apply_restored_fields: choices[0].delta.function_call.arguments not found"
                             .to_owned(),
                     ),
+                }
+            }
+            WriteBackInfo::OpenAiRefusal => {
+                let target = json
+                    .get_mut("choices")
+                    .and_then(|c| c.get_mut(0))
+                    .and_then(|c| c.get_mut("delta"))
+                    .and_then(|d| d.get_mut("refusal"));
+                match target {
+                    Some(v) => *v = Value::String(text.clone()),
+                    None => {
+                        return Err(
+                            "apply_restored_fields: choices[0].delta.refusal not found".to_owned()
+                        );
+                    }
                 }
             }
             WriteBackInfo::ResponsesApiDelta => {
@@ -1045,5 +1124,109 @@ mod tests {
         )
         .unwrap();
         assert_eq!(v["delta"]["partial_json"], json!("{\"restored\":true}"));
+    }
+    #[test]
+    fn extract_fields_openai_tool_calls() {
+        let v = json!({
+            "choices": [{"index": 0, "delta": {
+                "tool_calls": [{"index": 0, "function": {"arguments": "{\"q\":"}}]
+            }}]
+        });
+        let fields = extract_fields(&v, Provider::OpenAi, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, FieldKey::OpenAiToolCall { index: 0 });
+        assert_eq!(fields[0].text, "{\"q\":");
+    }
+
+    #[test]
+    fn extract_fields_openai_tool_calls_skips_empty_arguments() {
+        let v = json!({
+            "choices": [{"index": 0, "delta": {
+                "tool_calls": [{"index": 0, "id": "call_abc", "type": "function",
+                                "function": {"name": "get_secret", "arguments": ""}}]
+            }}]
+        });
+        let fields = extract_fields(&v, Provider::OpenAi, None);
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn extract_fields_openai_reasoning_content() {
+        let v = json!({
+            "choices": [{"index": 0, "delta": {"reasoning_content": "thinking..."}}]
+        });
+        let fields = extract_fields(&v, Provider::OpenAi, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, FieldKey::OpenAiReasoning);
+        assert_eq!(fields[0].text, "thinking...");
+    }
+
+    #[test]
+    fn extract_fields_openai_function_call_args() {
+        let v = json!({
+            "choices": [{"index": 0, "delta": {
+                "function_call": {"arguments": "{\"loc\":"}
+            }}]
+        });
+        let fields = extract_fields(&v, Provider::OpenAi, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, FieldKey::OpenAiFunctionCallArgs);
+        assert_eq!(fields[0].text, "{\"loc\":");
+    }
+
+    #[test]
+    fn extract_fields_openai_refusal() {
+        let v = json!({"choices": [{"delta": {"refusal": "I cannot do that"}}]});
+        let fields = extract_fields(&v, Provider::OpenAi, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, FieldKey::OpenAiRefusal);
+        assert_eq!(fields[0].text, "I cannot do that");
+    }
+
+    #[test]
+    fn extract_fields_openrouter_reasoning_content() {
+        let v = json!({
+            "choices": [{"index": 0, "delta": {"reasoning_content": "step 1..."}}]
+        });
+        let fields = extract_fields(&v, Provider::OpenRouter, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, FieldKey::OpenAiReasoning);
+    }
+
+    #[test]
+    fn apply_fields_openai_tool_calls() {
+        let mut v = json!({
+            "choices": [{"index": 0, "delta": {
+                "tool_calls": [{"index": 0, "function": {"arguments": "old"}}]
+            }}]
+        });
+        apply_restored_fields(
+            &mut v,
+            &[(
+                WriteBackInfo::OpenAiToolCall { array_pos: 0 },
+                "restored".to_owned(),
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            v["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+            json!("restored")
+        );
+    }
+
+    #[test]
+    fn apply_fields_openai_reasoning() {
+        let mut v = json!({
+            "choices": [{"index": 0, "delta": {"reasoning_content": "old"}}]
+        });
+        apply_restored_fields(
+            &mut v,
+            &[(WriteBackInfo::OpenAiReasoning, "restored".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(
+            v["choices"][0]["delta"]["reasoning_content"],
+            json!("restored")
+        );
     }
 }
