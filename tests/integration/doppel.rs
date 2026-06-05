@@ -1534,3 +1534,139 @@ async fn restore_openai_deprecated_function_call() {
         "deprecated function_call: swapped fake must not be visible",
     );
 }
+
+#[tokio::test]
+async fn restore_openai_responses_api_text_delta() {
+    // VC-SSE-7: response.output_text.delta and response.output_text.done must be restored.
+    use doppel::swap as doppel_swap;
+
+    let pat = doppel::patterns::openai_classic();
+    let body_bytes = [b"key: ".as_slice(), OPENAI_CLASSIC].concat();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    let n = fake_str.len() / 4;
+    let parts = [
+        fake_str[..n].to_owned(),
+        fake_str[n..2 * n].to_owned(),
+        fake_str[2 * n..3 * n].to_owned(),
+        fake_str[3 * n..].to_owned(),
+    ];
+
+    let mut sse_chunks: Vec<String> = vec![
+        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_test\",\"status\":\"in_progress\"}}\n\n".to_owned(),
+        "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n".to_owned(),
+        "event: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n".to_owned(),
+    ];
+    for part in &parts {
+        sse_chunks.push(format!(
+            "event: response.output_text.delta\ndata: {{\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"{part}\"}}\n\n"
+        ));
+    }
+    sse_chunks.push(format!(
+        "event: response.output_text.done\ndata: {{\"type\":\"response.output_text.done\",\"output_index\":0,\"content_index\":0,\"text\":\"{fake_str}\"}}\n\n"
+    ));
+    sse_chunks.push("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\"}}\n\n".to_owned());
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"gpt-4o","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"key={}"}}]}}"#,
+        String::from_utf8_lossy(OPENAI_CLASSIC)
+    );
+
+    let resp = client
+        .post(format!("{}/openai/v1/responses", harness.proxy_url()))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[OPENAI_CLASSIC],
+        "Responses API output_text.delta/done: Phase 3 must restore original secret",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "Responses API output_text.delta/done: swapped fake must not be visible",
+    );
+}
+
+#[tokio::test]
+async fn restore_openai_responses_api_reasoning_delta() {
+    // VC-SSE-8: response.reasoning_summary_text.delta must be restored.
+    use doppel::swap as doppel_swap;
+
+    let pat = doppel::patterns::openai_classic();
+    let body_bytes = [b"key: ".as_slice(), OPENAI_CLASSIC].concat();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    let n = fake_str.len() / 4;
+    let parts = [
+        fake_str[..n].to_owned(),
+        fake_str[n..2 * n].to_owned(),
+        fake_str[2 * n..3 * n].to_owned(),
+        fake_str[3 * n..].to_owned(),
+    ];
+
+    let mut sse_chunks: Vec<String> = Vec::new();
+    for part in &parts {
+        sse_chunks.push(format!(
+            "event: response.reasoning_summary_text.delta\ndata: {{\"type\":\"response.reasoning_summary_text.delta\",\"output_index\":0,\"summary_index\":0,\"delta\":\"{part}\"}}\n\n"
+        ));
+    }
+    sse_chunks.push(
+        "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"The answer is 42.\"}\n\n".to_owned(),
+    );
+    sse_chunks.push("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\"}}\n\n".to_owned());
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"gpt-4o","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"key={}"}}]}}"#,
+        String::from_utf8_lossy(OPENAI_CLASSIC)
+    );
+
+    let resp = client
+        .post(format!("{}/openai/v1/responses", harness.proxy_url()))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[OPENAI_CLASSIC],
+        "Responses API reasoning_summary_text.delta: Phase 3 must restore original secret",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "Responses API reasoning_summary_text.delta: swapped fake must not be visible",
+    );
+}

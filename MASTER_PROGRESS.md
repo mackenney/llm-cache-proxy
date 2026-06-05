@@ -6,7 +6,9 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 ## In Progress
 
-_(none)_
+### SSE field coverage gaps — all 4 providers
+
+Extend `extract_text_field`/`set_text_field` to cover all content-bearing SSE delta fields: Anthropic `thinking_delta`/`input_json_delta`, OpenAI `tool_calls` args/`reasoning_content`/`function_call.arguments`, Responses API full event schema, Gemini multi-part text/`codeExecutionResult`/`functionCall.args`. Introduces `FieldKey` multi-buffer architecture. 7-wave plan with E2E tests for all providers. → `plans/sse-field-coverage/`
 
 ## Queued
 

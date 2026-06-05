@@ -108,7 +108,7 @@ pub fn is_sse_first_chunk(bytes: &[u8]) -> bool {
 fn extract_fields(
     json: &Value,
     provider: Provider,
-    _event_type: Option<&str>,
+    event_type: Option<&str>,
 ) -> Vec<ExtractedField> {
     match provider {
         Provider::Anthropic => {
@@ -178,11 +178,51 @@ fn extract_fields(
             }
         }
         Provider::OpenAi | Provider::OpenRouter => {
-            // Responses API events are handled separately — guard on event_type.
-            // (This is a no-op until step-04 adds Responses API support;
-            // the guard is here so step-04 only needs to add the else-branch.)
-            if _event_type.is_some_and(|e| e.starts_with("response.")) {
-                return vec![]; // Handled in step-04
+            if let Some(et) = event_type {
+                if et.starts_with("response.") {
+                    return match et {
+                        "response.output_text.delta" => {
+                            if let Some(text) = json.get("delta").and_then(|v| v.as_str()) {
+                                vec![ExtractedField {
+                                    key: FieldKey::ResponsesApiDelta {
+                                        event_type: "output_text".into(),
+                                    },
+                                    text: text.to_owned(),
+                                    write_back: WriteBackInfo::ResponsesApiDelta,
+                                }]
+                            } else {
+                                vec![]
+                            }
+                        }
+                        "response.output_text.done" => {
+                            if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
+                                vec![ExtractedField {
+                                    key: FieldKey::ResponsesApiDone {
+                                        event_type: "output_text".into(),
+                                    },
+                                    text: text.to_owned(),
+                                    write_back: WriteBackInfo::ResponsesApiDone,
+                                }]
+                            } else {
+                                vec![]
+                            }
+                        }
+                        "response.reasoning_summary_text.delta" => {
+                            if let Some(text) = json.get("delta").and_then(|v| v.as_str()) {
+                                vec![ExtractedField {
+                                    key: FieldKey::ResponsesApiDelta {
+                                        event_type: "reasoning_summary_text".into(),
+                                    },
+                                    text: text.to_owned(),
+                                    write_back: WriteBackInfo::ResponsesApiDelta,
+                                }]
+                            } else {
+                                vec![]
+                            }
+                        }
+                        _ => vec![],
+                    };
+                }
             }
 
             let delta = match json.pointer("/choices/0/delta") {
@@ -1228,5 +1268,108 @@ mod tests {
             v["choices"][0]["delta"]["reasoning_content"],
             json!("restored")
         );
+    }
+    #[test]
+    fn extract_fields_responses_api_text_delta() {
+        let v = json!({
+            "type": "response.output_text.delta",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hello world"
+        });
+        let fields = extract_fields(&v, Provider::OpenAi, Some("response.output_text.delta"));
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            fields[0].key,
+            FieldKey::ResponsesApiDelta {
+                event_type: "output_text".into()
+            }
+        );
+        assert_eq!(fields[0].text, "Hello world");
+    }
+
+    #[test]
+    fn extract_fields_responses_api_text_done() {
+        let v = json!({
+            "type": "response.output_text.done",
+            "output_index": 0,
+            "content_index": 0,
+            "text": "Full assembled text here"
+        });
+        let fields = extract_fields(&v, Provider::OpenAi, Some("response.output_text.done"));
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            fields[0].key,
+            FieldKey::ResponsesApiDone {
+                event_type: "output_text".into()
+            }
+        );
+        assert_eq!(fields[0].text, "Full assembled text here");
+    }
+
+    #[test]
+    fn extract_fields_responses_api_reasoning_delta() {
+        let v = json!({
+            "type": "response.reasoning_summary_text.delta",
+            "output_index": 0,
+            "summary_index": 0,
+            "delta": "reasoning step"
+        });
+        let fields = extract_fields(
+            &v,
+            Provider::OpenAi,
+            Some("response.reasoning_summary_text.delta"),
+        );
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            fields[0].key,
+            FieldKey::ResponsesApiDelta {
+                event_type: "reasoning_summary_text".into()
+            }
+        );
+    }
+
+    #[test]
+    fn extract_fields_responses_api_skips_non_content_events() {
+        let v = json!({"type": "response.created", "response": {"id": "resp_test"}});
+        let fields = extract_fields(&v, Provider::OpenAi, Some("response.created"));
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn extract_fields_responses_api_does_not_use_chat_completions_paths() {
+        let v = json!({
+            "type": "response.output_text.delta",
+            "delta": "correct",
+            "choices": [{"index": 0, "delta": {"content": "wrong"}}]
+        });
+        let fields = extract_fields(&v, Provider::OpenAi, Some("response.output_text.delta"));
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].text, "correct");
+    }
+
+    #[test]
+    fn apply_fields_responses_api_delta() {
+        let mut v = json!({"type": "response.output_text.delta", "delta": "old"});
+        apply_restored_fields(
+            &mut v,
+            &[(WriteBackInfo::ResponsesApiDelta, "restored".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(v["delta"], json!("restored"));
+    }
+
+    #[test]
+    fn apply_fields_responses_api_done() {
+        let mut v = json!({"type": "response.output_text.done", "text": "old"});
+        apply_restored_fields(
+            &mut v,
+            &[(
+                WriteBackInfo::ResponsesApiDone,
+                "restored full text".to_owned(),
+            )],
+        )
+        .unwrap();
+        assert_eq!(v["text"], json!("restored full text"));
     }
 }
