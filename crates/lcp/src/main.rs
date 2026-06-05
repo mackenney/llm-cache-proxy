@@ -87,11 +87,11 @@ struct ExtensionsConfig {
 ///
 /// ```toml
 /// [extensions.doppel]
-/// secrets_file = "~/.config/lcp/patterns.toml"
+/// secrets_file = "~/.config/lcp/secrets.toml"
 /// ```
 ///
-/// Create a patterns file with `doppel init <path>`.
-/// Register registered secrets with `doppel secret add <value>`.
+/// Create a secrets file with `doppel init --patterns <path>`.
+/// Register additional secrets with `doppel register --patterns <path> --label <label>`.
 #[derive(Deserialize, Default)]
 struct DoppelConfig {
     secrets_file: Option<String>,
@@ -262,8 +262,8 @@ fn build_extension_pipeline(ext: Option<&ExtensionsConfig>) -> ExtensionPipeline
         tracing::warn!(
             "[extensions.doppel] is configured but `secrets_file` is not set; \
              doppel extension is disabled. \
-             Add `secrets_file = \"~/.config/lcp/patterns.toml\"` to [extensions.doppel], \
-             then run `doppel init <path>` to create the file."
+             Add secrets_file = ~/.config/lcp/secrets.toml to [extensions.doppel], \
+             then run `doppel init --patterns <path>` to create the file."
         );
         return ExtensionPipeline::new();
     };

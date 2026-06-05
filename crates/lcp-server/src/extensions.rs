@@ -11,24 +11,29 @@ use lcp_core::Provider;
 /// Pinned, boxed response byte stream passed through Phase 3 hooks.
 pub type ResponseStream = Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>;
 
-/// Construction surface for [`SensitiveState`]. Produced and filled in Phase 2,
-/// sealed via [`build`](SensitiveStateBuilder::build) before being handed to the
-/// framework.
+/// Builder for [`SensitiveState`]. Produced and filled during Phase 2,
+/// then sealed via [`build`](SensitiveStateBuilder::build) before being handed
+/// to the framework for exclusive delivery to this extension's Phase 3 hook.
 #[derive(Default)]
 pub struct SensitiveStateBuilder {
     inner: HashMap<String, String>,
 }
 
 impl SensitiveStateBuilder {
+    /// Create an empty builder.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Insert a key/value pair into the state.
+    ///
+    /// Overwrites any existing value for the same key.
     pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
         self.inner.insert(key.into(), value.into());
         self
     }
 
+    /// Seal the builder into an immutable [`SensitiveState`].
     pub fn build(self) -> SensitiveState {
         SensitiveState {
             inner: Arc::new(self.inner),
@@ -67,15 +72,19 @@ impl fmt::Debug for SensitiveState {
     }
 }
 
-/// Read-only snapshot of the in-flight request passed to extension hooks.
+/// Read-only snapshot of the in-flight request passed to each extension hook.
 ///
-/// `cache_key` is `None` in Phase 1 (not yet computed) and `Some` in
+/// `cache_key` is `None` during Phase 1 (not yet computed) and `Some` during
 /// Phase 2 and Phase 3.
 #[derive(Clone, Debug)]
 pub struct ProxyCtx {
+    /// The provider identified from the request path prefix.
     pub provider: Provider,
+    /// HTTP method.
     pub method: String,
+    /// Request path, without the provider prefix.
     pub path: String,
+    /// BLAKE3 cache key. `None` during Phase 1; `Some` in Phase 2 and Phase 3.
     pub cache_key: Option<String>,
 }
 
@@ -86,6 +95,7 @@ pub struct ProxyCtx {
 ///
 /// Implementors must be `Send + Sync + 'static`.
 pub trait Extension: Send + Sync + 'static {
+    /// The name of this extension, used in logs and diagnostics.
     fn name(&self) -> &'static str;
 
     /// Phase 1 — fires before cache key computation on every proxied request.
@@ -135,8 +145,13 @@ pub trait Extension: Send + Sync + 'static {
 
 /// Ordered collection of [`Extension`]s run on each proxied request.
 ///
-/// An empty pipeline is a no-op. Extensions are called in registration order.
-/// `Debug` shows only the extension count — never extension internals.
+/// An empty pipeline is a no-op. Extensions run in registration order.
+/// The `Debug` impl shows only the extension count — never extension internals.
+#[derive(Clone, Default)]
+pub struct ExtensionPipeline {
+    extensions: Vec<Arc<dyn Extension>>,
+}
+
 impl fmt::Debug for ExtensionPipeline {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExtensionPipeline")
@@ -144,12 +159,8 @@ impl fmt::Debug for ExtensionPipeline {
             .finish()
     }
 }
-
-#[derive(Clone, Default)]
-pub struct ExtensionPipeline {
-    extensions: Vec<Arc<dyn Extension>>,
-}
 impl ExtensionPipeline {
+    /// Create an empty pipeline.
     pub fn new() -> Self {
         Self::default()
     }

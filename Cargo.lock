@@ -555,8 +555,7 @@ dependencies = [
 
 [[package]]
 name = "doppel"
-version = "0.1.0"
-source = "git+https://git.sr.ht/~mackenney/its-classified?branch=ignacio%40doppel%2Frename-crate#8020be4679b3adbc9c74a562ac7ee617f7633d20"
+version = "0.0.1"
 dependencies = [
  "aho-corasick",
  "base64",

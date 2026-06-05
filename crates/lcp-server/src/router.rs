@@ -5,6 +5,11 @@ use tower_http::decompression::RequestDecompressionLayer;
 use crate::proxy::AppState;
 use crate::{proxy, stats};
 
+/// Build the Axum [`Router`] for the proxy server.
+///
+/// Mounts the admin endpoints (`/`, `/stats`, `/cache`, `/trace`) and the
+/// catch-all proxy handler at `/{provider}/{*path}`. Applies request
+/// decompression so upstreams always receive plain bodies.
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(stats::health))

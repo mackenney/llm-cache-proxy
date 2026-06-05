@@ -1,10 +1,15 @@
 [package]
 name = "lcp"
-description = "llm-cache-proxy CLI"
+description = "Local HTTP proxy that caches LLM API calls and replays them at full speed"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-
+authors.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+publish = true
+keywords = ["llm", "cache", "proxy", "ai", "openai"]
+categories = ["command-line-utilities", "development-tools"]
 [[bin]]
 name = "lcp"
 path = "src/main.rs"

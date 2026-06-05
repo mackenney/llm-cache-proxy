@@ -33,7 +33,6 @@ _(none)_
 | What | Ref |
 |---|---|
 | `rename-to-doppel` — rename `its-classified` → `doppel`, `swap`/`restore` verbs, `SecretsFile`, `DoppelExt` throughout | 887d985 |
-| `rename-to-doppel` — rename `its-classified` → `doppel`, `swap`/`restore` verbs, `SecretsFile`, `DoppelExt` throughout | 887d985 |
 | fix: stale scrub/unscrub vocabulary in docs, tests, CLI strings, SPEC.md | 253ffa1 |
 
 | What | Ref |

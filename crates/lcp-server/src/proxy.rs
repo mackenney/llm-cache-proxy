@@ -41,20 +41,37 @@ impl<T> Stream for ReceiverStream<T> {
     }
 }
 
+/// Shared Axum application state cloned into every request handler.
 #[derive(Clone)]
 pub struct AppState {
+    /// Proxy configuration, including the cache and extension pipeline.
     pub config: Arc<ServerConfig>,
+    /// Shared reqwest client for upstream requests.
     pub client: Arc<reqwest::Client>,
+    /// Set of background cache-write tasks. Bounded to prevent handle accumulation.
     pub background_writes: Arc<Mutex<JoinSet<()>>>,
 }
 
 impl AppState {
+    /// Wait for all in-flight background cache-write tasks to complete.
+    ///
+    /// Used in tests and graceful-shutdown paths to ensure the cache is
+    /// consistent before the process exits.
     pub async fn wait_for_pending_writes(&self) {
         let mut set = self.background_writes.lock().await;
         while set.join_next().await.is_some() {}
     }
 }
 
+/// Axum handler for all proxied LLM requests.
+///
+/// Dispatched for routes matching `/{provider}/{*path}`. Runs the three-phase
+/// extension pipeline, checks the cache, forwards to the upstream on a miss,
+/// and streams the response back to the client while writing to the cache in
+/// the background.
+///
+/// Responses include `x-lcp-cache: HIT | MISS | BYPASS` and (on hits/misses)
+/// `x-lcp-key: <first-12-hex-chars-of-cache-key>`.
 pub async fn handle(
     State(state): State<AppState>,
     method: Method,

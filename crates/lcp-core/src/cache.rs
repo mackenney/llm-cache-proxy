@@ -15,12 +15,18 @@ pub struct Cache {
     ttl_seconds: u64,
 }
 
+/// Aggregate hit/miss statistics and byte counts for the cache.
 #[derive(Debug, serde::Serialize)]
 pub struct CacheStats {
+    /// Total number of cache hits since last reset.
     pub hits: i64,
+    /// Total number of cache misses since last reset.
     pub misses: i64,
+    /// Total response bytes served from cache since last reset.
     pub bytes_served_from_cache: i64,
+    /// Current number of entries in the cache.
     pub entries: i64,
+    /// Entry count grouped by model name.
     pub by_model: std::collections::HashMap<String, i64>,
 }
 
@@ -216,6 +222,7 @@ impl Cache {
         Ok(())
     }
 
+    /// Return all cache entries, ordered by `created_at` descending.
     pub fn list_entries(&self) -> Result<Vec<CacheEntry>> {
         let conn = self.inner.lock().expect("cache mutex poisoned");
         let mut stmt = conn.prepare(

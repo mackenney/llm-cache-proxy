@@ -11,7 +11,8 @@ resolver = "2"
 version = "0.0.1"
 edition = "2024"
 authors = ["Ignacio"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mackenney/llm-cache-proxy"
 publish = false
 
 [profile.dev]
@@ -61,7 +62,11 @@ chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 
 # Internal crates
-lcp-core = { path = "crates/lcp-core" }
-lcp-server = { path = "crates/lcp-server" }
-doppel = { git = "https://git.sr.ht/~mackenney/its-classified", branch = "ignacio@doppel/rename-crate", features = ["async"] }
+lcp-core = { path = "crates/lcp-core", version = "0.0.1" }
+lcp-server = { path = "crates/lcp-server", version = "0.0.1" }
+doppel = { version = "0.0.1", features = ["async"] }
 hex = "0.4"
+
+[patch.crates-io]
+# Local override until doppel is published to crates.io. Remove this section after publishing.
+doppel = { path = "/home/ignacio/pr/doppel/doppel" }

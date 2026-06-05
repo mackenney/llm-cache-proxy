@@ -3,9 +3,13 @@ use std::fmt;
 /// Supported upstream LLM providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Provider {
+    /// Anthropic (Claude models).
     Anthropic,
+    /// OpenAI (GPT models).
     OpenAi,
+    /// OpenRouter (multi-provider gateway).
     OpenRouter,
+    /// Google Gemini.
     Gemini,
 }
 
@@ -25,7 +29,7 @@ impl Provider {
         match self {
             Provider::Anthropic => "https://api.anthropic.com",
             Provider::OpenAi => "https://api.openai.com",
-            Provider::OpenRouter => "https://openrouter.ai/api",
+            Provider::OpenRouter => "https://openrouter.ai/api/v1",
             Provider::Gemini => "https://generativelanguage.googleapis.com",
         }
     }

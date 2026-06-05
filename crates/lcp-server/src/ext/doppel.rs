@@ -41,17 +41,30 @@ use crate::extensions::{
 
 use crate::ext::sse_restore::SseRestoreStream;
 
+/// Error returned by [`DoppelExt::from_secrets_file`] when the secrets file
+/// cannot be read or deserialized.
+#[derive(Debug, thiserror::Error)]
+pub enum DoppelExtLoadError {
+    /// The secrets file could not be read from disk.
+    #[error("cannot read patterns file: {0}")]
+    Io(#[from] std::io::Error),
+    /// The secrets file was read but could not be deserialized.
+    #[error("invalid patterns file: {0}")]
+    Patterns(#[from] doppel::SecretsFileError),
+}
+
 /// Extension that swaps detected secrets from request bodies before they are
 /// forwarded to the upstream, and restores them in the response stream.
 ///
-/// Construct with one or more [`Pattern`]s (Tier 1 built-ins from
-/// [`doppel::patterns`] or Tier 2 via [`doppel::register`]).
+/// Construct with one or more [`Pattern`]s — structural built-ins from
+/// [`doppel::patterns`] or registered secrets via [`doppel::register`] — and
+/// register it with `ExtensionPipeline::register`.
 ///
 /// # Example
 ///
 /// ```ignore
 /// use doppel::{register, patterns};
-/// use lcp_server::DoppelExt;
+/// use lcp_server::{DoppelExt, ExtensionPipeline};
 ///
 /// let pipeline = ExtensionPipeline::new().register(
 ///     DoppelExt::new(vec![
@@ -61,15 +74,6 @@ use crate::ext::sse_restore::SseRestoreStream;
 ///     ])
 /// );
 /// ```
-/// Error returned by [`DoppelExt::from_secrets_file`].
-#[derive(Debug, thiserror::Error)]
-pub enum DoppelExtLoadError {
-    #[error("cannot read patterns file: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("invalid patterns file: {0}")]
-    Patterns(#[from] doppel::SecretsFileError),
-}
-
 pub struct DoppelExt {
     patterns: Vec<Pattern>,
 }

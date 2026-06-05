@@ -1,9 +1,7 @@
 # lcp — LLM Cache Proxy
 
-> **⚠️ Internal tool — use with caution.**
-> This project is at version 0.0.1, pre-release, and under active development.
-> APIs, CLI flags, config keys, and cache formats **may change without notice**.
-> It is not yet published to crates.io and carries no stability guarantees.
+> **⚠️ Pre-release.** Version 0.0.1 — APIs, CLI flags, config keys, and cache formats
+> **may change without notice** until a stable release is tagged.
 
 A local HTTP proxy that caches LLM API responses on disk and replays them on
 subsequent identical requests. Stop paying for the same completion twice during
@@ -20,7 +18,7 @@ never busts the cache.
 ## Quick start
 
 ```sh
-cargo install --git https://github.com/mackenney/llm-cache-proxy crates/lcp
+cargo install lcp
 
 # Start the proxy (default port 9001)
 lcp
@@ -48,7 +46,7 @@ Precedence: CLI flag > env var > config file > built-in default.
 | `--timeout` | `LCP_TIMEOUT` | `300` | Upstream timeout in seconds |
 | `--anthropic-upstream` | `LCP_ANTHROPIC_UPSTREAM` | `https://api.anthropic.com` | |
 | `--openai-upstream` | `LCP_OPENAI_UPSTREAM` | `https://api.openai.com` | |
-| `--openrouter-upstream` | `LCP_OPENROUTER_UPSTREAM` | `https://openrouter.ai/api` | |
+| `--openrouter-upstream` | `LCP_OPENROUTER_UPSTREAM` | `https://openrouter.ai/api/v1` | |
 | `--gemini-upstream` | `LCP_GEMINI_UPSTREAM` | `https://generativelanguage.googleapis.com` | |
 | `--config` | `LCP_CONFIG` | `~/.config/lcp/config.toml` | Config file path |
 
@@ -94,3 +92,39 @@ GET  /trace/<id>?full=true  Same with full request/response bodies
 SSE and chunked responses are handled transparently. On a miss, chunks are
 forwarded as they arrive. On a hit, stored chunks are replayed at full speed
 with original boundaries preserved.
+
+## Secret protection (doppel extension)
+
+lcp can strip your API keys and other secrets from requests before they are
+forwarded upstream and before they are written to the cache. The cache never
+stores real credentials — only structurally-equivalent fakes. Originals are
+restored transparently in the response stream.
+
+This is opt-in via the `[extensions.doppel]` config block, backed by the
+[doppel](https://crates.io/crates/doppel) crate.
+
+### Setup
+
+```sh
+# Install the doppel CLI
+cargo install doppel
+
+# Create a secrets file (adds built-in structural patterns for Anthropic, OpenAI, etc.)
+doppel init --patterns ~/.config/lcp/secrets.toml
+
+# Register any additional secrets you want scrubbed (e.g. internal tokens)
+doppel register --patterns ~/.config/lcp/secrets.toml --label my-token
+```
+
+### Enable in lcp config
+
+Add to `~/.config/lcp/config.toml`:
+
+```toml
+[extensions.doppel]
+secrets_file = "~/.config/lcp/secrets.toml"
+```
+
+lcp logs `doppel extension loaded` on startup when the file is read successfully.
+If the file is missing or invalid, doppel is disabled with a warning — lcp still
+runs normally, just without secret protection.

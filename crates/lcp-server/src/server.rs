@@ -12,22 +12,31 @@ use crate::router::build_router;
 /// Runtime configuration for the proxy server.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
+    /// Address to bind the listening socket.
     pub addr: SocketAddr,
+    /// The SQLite-backed exchange cache.
     pub cache: Cache,
-    /// Upstream request timeout in seconds. 0 means no timeout.
+    /// Upstream request timeout in seconds. `0` means no timeout.
     pub timeout_seconds: u64,
-    /// Override upstream URL per provider. Falls back to provider default when absent.
+    /// Override the Anthropic upstream URL. Falls back to the provider default when `None`.
     pub anthropic_upstream: Option<String>,
+    /// Override the OpenAI upstream URL. Falls back to the provider default when `None`.
     pub openai_upstream: Option<String>,
+    /// Override the OpenRouter upstream URL. Falls back to the provider default when `None`.
     pub openrouter_upstream: Option<String>,
+    /// Override the Gemini upstream URL. Falls back to the provider default when `None`.
     pub gemini_upstream: Option<String>,
-    /// Bounded channel capacity for streaming response chunks. Default: 32.
+    /// Bounded channel capacity for streaming response chunks. Default: `32`.
     pub stream_channel_capacity: usize,
     /// Extension pipeline applied to every proxied request.
     pub extensions: ExtensionPipeline,
 }
 
 impl ServerConfig {
+    /// Return the configured upstream base URL for `provider`.
+    ///
+    /// Uses the per-provider override when set; otherwise falls back to the
+    /// provider's built-in default URL.
     pub fn upstream_for(&self, provider: lcp_core::Provider) -> String {
         match provider {
             lcp_core::Provider::Anthropic => self
@@ -65,7 +74,11 @@ pub fn build_upstream_client(timeout_seconds: u64) -> reqwest::Client {
     cb.build().expect("build reqwest Client")
 }
 
-/// Start the proxy and block until the server terminates.
+/// Start the proxy server and block until it terminates.
+///
+/// Binds to `config.addr`, constructs the Axum router, and awaits incoming
+/// connections. Returns when the server shuts down or an unrecoverable error
+/// occurs.
 pub async fn serve(config: ServerConfig) -> Result<()> {
     let addr = config.addr;
     let timeout_seconds = config.timeout_seconds;

@@ -6,6 +6,7 @@ use serde_json::json;
 
 use crate::proxy::AppState;
 
+/// `GET /` — health check. Returns `{"status":"ok","service":"lcp","version":"…"}`.
 pub async fn health(_state: State<AppState>) -> impl IntoResponse {
     Json(json!({
         "status": "ok",
@@ -14,6 +15,7 @@ pub async fn health(_state: State<AppState>) -> impl IntoResponse {
     }))
 }
 
+/// `GET /stats` — return aggregate hit/miss counts, bytes served, and entry counts.
 pub async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
     let cache = state.config.cache.clone();
     let result = tokio::task::spawn_blocking(move || cache.stats())
@@ -31,6 +33,7 @@ pub async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+/// `DELETE /stats` — reset all stat counters.
 pub async fn clear_stats(State(state): State<AppState>) -> impl IntoResponse {
     let cache = state.config.cache.clone();
     let result = tokio::task::spawn_blocking(move || cache.clear_stats())
@@ -42,6 +45,7 @@ pub async fn clear_stats(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+/// `DELETE /cache` — purge all cached entries and return the count removed.
 pub async fn clear_cache(State(state): State<AppState>) -> impl IntoResponse {
     let cache = state.config.cache.clone();
     let result = tokio::task::spawn_blocking(move || cache.clear_entries())
@@ -53,6 +57,7 @@ pub async fn clear_cache(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+/// `GET /cache/{key}` — fetch a stored exchange by its cache key.
 pub async fn get_cache_entry(
     State(state): State<AppState>,
     Path(key): Path<String>,
@@ -75,12 +80,18 @@ pub async fn get_cache_entry(
     }
 }
 
+/// Query parameters for `GET /trace/{trace_id}`.
 #[derive(serde::Deserialize)]
 pub struct TraceQuery {
+    /// When `true`, return full request/response bodies; otherwise return metadata only.
     #[serde(default)]
     pub full: bool,
 }
 
+/// `GET /trace/{trace_id}[?full=true]` — list entries recorded under a trace ID.
+///
+/// With `?full=true` returns complete request/response bodies. Without it
+/// returns metadata only (key, created_at, status, hit_count).
 pub async fn get_trace(
     State(state): State<AppState>,
     Path(trace_id): Path<String>,

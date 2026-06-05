@@ -1,10 +1,14 @@
 [package]
 name = "lcp-core"
-description = "Core types, hashing, cache, and provider config for llm-cache-proxy"
+description = "Core types, hashing, SQLite cache, and provider config for lcp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-
+authors.workspace = true
+repository.workspace = true
+publish = true
+keywords = ["llm", "cache", "ai", "proxy"]
+categories = ["database", "development-tools"]
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }

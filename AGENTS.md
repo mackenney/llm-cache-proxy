@@ -76,7 +76,7 @@ Every human and agent working on lcp reads it first to understand current state.
 | Crate | Role |
 |---|---|
 | `lcp-core` | Types, cache key hashing, SQLite cache, provider enum |
-| `lcp-server` | Axum HTTP server, proxy handler, stats endpoints |
+| `lcp-server` | Axum HTTP server, proxy handler, stats endpoints, extension pipeline |
 | `lcp` | CLI binary |
 
 ## Conventions

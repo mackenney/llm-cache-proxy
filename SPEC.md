@@ -38,7 +38,7 @@ proxied LLM API calls use HTTP POST.
 |---|---|---|
 | `anthropic` | `https://api.anthropic.com` | `LCP_ANTHROPIC_UPSTREAM` |
 | `openai` | `https://api.openai.com` | `LCP_OPENAI_UPSTREAM` |
-| `openrouter` | `https://openrouter.ai/api` | `LCP_OPENROUTER_UPSTREAM` |
+| `openrouter` | `https://openrouter.ai/api/v1` | `LCP_OPENROUTER_UPSTREAM` |
 | `gemini` | `https://generativelanguage.googleapis.com` | `LCP_GEMINI_UPSTREAM` |
 
 A client sets:
@@ -344,25 +344,32 @@ Behaviour when the section is present:
 - `secrets_file` set, file missing or invalid → warning at startup, swapping disabled.
 - `secrets_file` set, file valid → doppel extension loaded; all patterns in the file are active.
 
-Create a patterns file: `doppel init <path>`.
-Register registered secrets: `doppel register --patterns <path>`.
+Create a patterns file: `doppel init --patterns <path>`.
+Register secrets: `doppel register --patterns <path> --label <label>`.
 
 Example:
 ```toml
 [extensions.doppel]
-secrets_file = "~/.config/lcp/patterns.toml"
+secrets_file = "~/.config/lcp/secrets.toml"
 ```
 ## Extension Architecture
 
-lcp is structured so that a future interceptor layer can be added without
-rewriting the proxy pipeline. Intended insertion points:
+lcp runs an ordered extension pipeline on every proxied request. Extensions
+implement the `Extension` trait and are registered with `ExtensionPipeline`.
+Three phases fire per request:
 
-- Before cache key computation: request normalization, field redaction.
-- Before response storage: response filtering, enrichment.
-- After cache lookup: audit logging, cache decoration.
+| Phase | Hook | Fires | Purpose |
+|---|---|---|---|
+| 1 | `on_request_body` | every request, before cache key | normalize or inspect the body |
+| 2 | `on_upstream_body` | cache miss only, before forwarding | transform the body sent to the upstream |
+| 3 | `on_response_stream` | cache miss only, after upstream responds | wrap the response stream |
 
-The swap/restore extension is the only built-in extension and is opt-in
-via `[extensions.doppel]` in the config file.
+Phase 1 fires on every request including bypasses and cache hits; Phases 2 and 3
+fire only on cache misses. An empty pipeline is a no-op.
+
+The swap/restore extension (`DoppelExt`) is the only built-in extension. It is
+opt-in via `[extensions.doppel]` in the config file. The per-phase behavior is
+specified in `crates/lcp-server/SPEC.md §Extension Pipeline`.
 
 ## Per-Component Specs
 
