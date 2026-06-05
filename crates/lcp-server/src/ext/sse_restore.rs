@@ -4,12 +4,13 @@
 //! restoration in `text/event-stream` responses, where raw-byte Aho-Corasick
 //! fails because the fake key never appears contiguously in the byte stream.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
+use doppel::restore as doppel_restore;
 use doppel::restore_stream;
 use doppel::{Entry, SessionKey};
 use futures_util::future::BoxFuture;
@@ -18,6 +19,74 @@ use lcp_core::Provider;
 use serde_json::Value;
 
 use crate::extensions::ResponseStream;
+
+/// Identifies a logically independent content stream within an SSE response.
+/// Fields with the same key accumulate into the same buffer.
+// Variants not yet extracted are defined here for future steps; suppress dead_code
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum FieldKey {
+    // Anthropic — keyed by (delta_type, content_block_index)
+    AnthropicDelta { delta_type: String, index: u64 },
+    // OpenAI / OpenRouter chat completions
+    OpenAiContent,
+    OpenAiToolCall { index: u64 },
+    OpenAiReasoning,
+    OpenAiFunctionCallArgs,
+    // OpenAI Responses API
+    ResponsesApiDelta { event_type: String },
+    ResponsesApiDone { event_type: String },
+    // Gemini
+    GeminiText { thought: bool },
+    GeminiCodeExecOutput,
+    GeminiFuncCallArg { arg_key: String },
+}
+
+/// A content-bearing field extracted from one SSE event.
+struct ExtractedField {
+    key: FieldKey,
+    text: String,
+    /// Write-back location: the information needed to set the restored text
+    /// back into the correct JSON path. This is separate from `key` because
+    /// the accumulation identity may differ from the write-back path (e.g.,
+    /// Gemini parts keyed by `thought` but written back by `part_index`).
+    write_back: WriteBackInfo,
+}
+
+/// Information needed to write a restored value back into its JSON location.
+// Variants not yet used are defined here for future steps; suppress dead_code
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+enum WriteBackInfo {
+    /// Anthropic: `json["delta"][field_name]` where field_name is "text", "thinking", or "partial_json"
+    AnthropicDelta { field_name: String },
+    /// OpenAI: `json["choices"][0]["delta"]["content"]`
+    OpenAiContent,
+    /// OpenAI: `json["choices"][0]["delta"]["tool_calls"][array_pos]["function"]["arguments"]`
+    /// `array_pos` is the position within the `tool_calls` array in *this* event's JSON.
+    OpenAiToolCall { array_pos: usize },
+    /// OpenAI: `json["choices"][0]["delta"]["reasoning_content"]`
+    OpenAiReasoning,
+    /// OpenAI: `json["choices"][0]["delta"]["function_call"]["arguments"]`
+    OpenAiFunctionCallArgs,
+    /// Responses API: `json["delta"]`
+    ResponsesApiDelta,
+    /// Responses API: `json["text"]`
+    ResponsesApiDone,
+    /// Gemini: `json["candidates"][0]["content"]["parts"][part_index]["text"]`
+    GeminiPartText { part_index: usize },
+    /// Gemini: `json["candidates"][0]["content"]["parts"][part_index]["codeExecutionResult"]["output"]`
+    GeminiPartCodeExecOutput { part_index: usize },
+    /// Gemini: `json["candidates"][0]["content"]["parts"][part_index]["functionCall"]["args"][arg_key]`
+    GeminiPartFuncCallArg { part_index: usize, arg_key: String },
+}
+
+/// Records what a single frame contributed to each accumulation buffer.
+struct FrameFieldContribution {
+    key: FieldKey,
+    byte_len: usize,
+    write_back: WriteBackInfo,
+}
 
 /// Returns `true` if the first bytes of a response chunk look like an SSE stream.
 ///
@@ -29,71 +98,234 @@ pub fn is_sse_first_chunk(bytes: &[u8]) -> bool {
     bytes.starts_with(b"data: ") || bytes.starts_with(b"event: ")
 }
 
-/// Returns the provider-specific text field from a parsed SSE event JSON, if present.
+/// Returns the provider-specific content fields from a parsed SSE event JSON.
 ///
-/// Returns `None` for events that do not carry text content (non-text events or
-/// when the relevant fields are absent).
-pub fn extract_text_field(json: &Value, provider: Provider) -> Option<&str> {
+/// Returns an empty vec for events that do not carry text content (non-text
+/// events or when the relevant fields are absent).
+fn extract_fields(
+    json: &Value,
+    provider: Provider,
+    _event_type: Option<&str>,
+) -> Vec<ExtractedField> {
     match provider {
         Provider::Anthropic => {
-            if json["type"].as_str()? != "content_block_delta" {
-                return None;
+            let Some(event_type) = json["type"].as_str() else {
+                return vec![];
+            };
+            if event_type != "content_block_delta" {
+                return vec![];
             }
-            if json["delta"]["type"].as_str()? != "text_delta" {
-                return None;
+            let Some(delta_type) = json["delta"]["type"].as_str() else {
+                return vec![];
+            };
+            if delta_type != "text_delta" {
+                return vec![];
             }
-            json["delta"]["text"].as_str()
+            let Some(text) = json["delta"]["text"].as_str() else {
+                return vec![];
+            };
+            let index = json["index"].as_u64().unwrap_or(0);
+            vec![ExtractedField {
+                key: FieldKey::AnthropicDelta {
+                    delta_type: delta_type.to_owned(),
+                    index,
+                },
+                text: text.to_owned(),
+                write_back: WriteBackInfo::AnthropicDelta {
+                    field_name: "text".to_owned(),
+                },
+            }]
         }
         Provider::OpenAi | Provider::OpenRouter => {
-            json.pointer("/choices/0/delta/content")?.as_str()
+            let Some(text) = json
+                .pointer("/choices/0/delta/content")
+                .and_then(Value::as_str)
+            else {
+                return vec![];
+            };
+            vec![ExtractedField {
+                key: FieldKey::OpenAiContent,
+                text: text.to_owned(),
+                write_back: WriteBackInfo::OpenAiContent,
+            }]
         }
-        Provider::Gemini => json.pointer("/candidates/0/content/parts/0/text")?.as_str(),
+        Provider::Gemini => {
+            let Some(text) = json
+                .pointer("/candidates/0/content/parts/0/text")
+                .and_then(Value::as_str)
+            else {
+                return vec![];
+            };
+            vec![ExtractedField {
+                key: FieldKey::GeminiText { thought: false },
+                text: text.to_owned(),
+                write_back: WriteBackInfo::GeminiPartText { part_index: 0 },
+            }]
+        }
     }
 }
 
-/// Sets the provider-specific text field in a mutable SSE event JSON.
+/// Writes restored values back into their JSON locations.
 ///
-/// Returns `true` if the field was located and set; `false` if not found
-/// (non-text event).
-pub fn set_text_field(json: &mut Value, provider: Provider, text: String) -> bool {
-    match provider {
-        Provider::Anthropic => {
-            if let Some(v) = json.get_mut("delta").and_then(|d| d.get_mut("text")) {
-                *v = Value::String(text);
-                true
-            } else {
-                false
+/// Returns `Err` if the target path doesn't exist in the JSON (signals
+/// extract/apply mismatch).
+fn apply_restored_fields(
+    json: &mut Value,
+    restorations: &[(WriteBackInfo, String)],
+) -> Result<(), String> {
+    for (write_back, text) in restorations {
+        match write_back {
+            WriteBackInfo::AnthropicDelta { field_name } => {
+                let target = json
+                    .get_mut("delta")
+                    .and_then(|d| d.get_mut(field_name.as_str()));
+                match target {
+                    Some(v) => *v = Value::String(text.clone()),
+                    None => {
+                        return Err(format!(
+                            "apply_restored_fields: delta.{field_name} not found in JSON"
+                        ));
+                    }
+                }
             }
-        }
-        Provider::OpenAi | Provider::OpenRouter => {
-            if let Some(v) = json
-                .get_mut("choices")
-                .and_then(|c| c.get_mut(0))
-                .and_then(|c| c.get_mut("delta"))
-                .and_then(|d| d.get_mut("content"))
-            {
-                *v = Value::String(text);
-                true
-            } else {
-                false
+            WriteBackInfo::OpenAiContent => {
+                let target = json
+                    .get_mut("choices")
+                    .and_then(|c| c.get_mut(0))
+                    .and_then(|c| c.get_mut("delta"))
+                    .and_then(|d| d.get_mut("content"));
+                match target {
+                    Some(v) => *v = Value::String(text.clone()),
+                    None => {
+                        return Err(
+                            "apply_restored_fields: choices[0].delta.content not found".to_owned()
+                        );
+                    }
+                }
             }
-        }
-        Provider::Gemini => {
-            if let Some(v) = json
-                .get_mut("candidates")
-                .and_then(|c| c.get_mut(0))
-                .and_then(|c| c.get_mut("content"))
-                .and_then(|c| c.get_mut("parts"))
-                .and_then(|p| p.get_mut(0))
-                .and_then(|p| p.get_mut("text"))
-            {
-                *v = Value::String(text);
-                true
-            } else {
-                false
+            WriteBackInfo::OpenAiToolCall { array_pos } => {
+                let target = json
+                    .get_mut("choices")
+                    .and_then(|c| c.get_mut(0))
+                    .and_then(|c| c.get_mut("delta"))
+                    .and_then(|d| d.get_mut("tool_calls"))
+                    .and_then(|tc| tc.get_mut(*array_pos))
+                    .and_then(|tc| tc.get_mut("function"))
+                    .and_then(|f| f.get_mut("arguments"));
+                match target {
+                    Some(v) => *v = Value::String(text.clone()),
+                    None => {
+                        return Err(format!(
+                            "apply_restored_fields: tool_calls[{array_pos}].function.arguments not found"
+                        ));
+                    }
+                }
+            }
+            WriteBackInfo::OpenAiReasoning => {
+                let target = json
+                    .get_mut("choices")
+                    .and_then(|c| c.get_mut(0))
+                    .and_then(|c| c.get_mut("delta"))
+                    .and_then(|d| d.get_mut("reasoning_content"));
+                match target {
+                    Some(v) => *v = Value::String(text.clone()),
+                    None => {
+                        return Err(
+                            "apply_restored_fields: choices[0].delta.reasoning_content not found"
+                                .to_owned(),
+                        );
+                    }
+                }
+            }
+            WriteBackInfo::OpenAiFunctionCallArgs => {
+                let target = json
+                    .get_mut("choices")
+                    .and_then(|c| c.get_mut(0))
+                    .and_then(|c| c.get_mut("delta"))
+                    .and_then(|d| d.get_mut("function_call"))
+                    .and_then(|fc| fc.get_mut("arguments"));
+                match target {
+                    Some(v) => *v = Value::String(text.clone()),
+                    None => return Err(
+                        "apply_restored_fields: choices[0].delta.function_call.arguments not found"
+                            .to_owned(),
+                    ),
+                }
+            }
+            WriteBackInfo::ResponsesApiDelta => {
+                let target = json.get_mut("delta");
+                match target {
+                    Some(v) => *v = Value::String(text.clone()),
+                    None => return Err("apply_restored_fields: delta not found".to_owned()),
+                }
+            }
+            WriteBackInfo::ResponsesApiDone => {
+                let target = json.get_mut("text");
+                match target {
+                    Some(v) => *v = Value::String(text.clone()),
+                    None => return Err("apply_restored_fields: text not found".to_owned()),
+                }
+            }
+            WriteBackInfo::GeminiPartText { part_index } => {
+                let target = json
+                    .get_mut("candidates")
+                    .and_then(|c| c.get_mut(0))
+                    .and_then(|c| c.get_mut("content"))
+                    .and_then(|c| c.get_mut("parts"))
+                    .and_then(|p| p.get_mut(*part_index))
+                    .and_then(|p| p.get_mut("text"));
+                match target {
+                    Some(v) => *v = Value::String(text.clone()),
+                    None => {
+                        return Err(format!(
+                            "apply_restored_fields: candidates[0].content.parts[{part_index}].text not found"
+                        ));
+                    }
+                }
+            }
+            WriteBackInfo::GeminiPartCodeExecOutput { part_index } => {
+                let target = json
+                    .get_mut("candidates")
+                    .and_then(|c| c.get_mut(0))
+                    .and_then(|c| c.get_mut("content"))
+                    .and_then(|c| c.get_mut("parts"))
+                    .and_then(|p| p.get_mut(*part_index))
+                    .and_then(|p| p.get_mut("codeExecutionResult"))
+                    .and_then(|r| r.get_mut("output"));
+                match target {
+                    Some(v) => *v = Value::String(text.clone()),
+                    None => {
+                        return Err(format!(
+                            "apply_restored_fields: candidates[0].content.parts[{part_index}].codeExecutionResult.output not found"
+                        ));
+                    }
+                }
+            }
+            WriteBackInfo::GeminiPartFuncCallArg {
+                part_index,
+                arg_key,
+            } => {
+                let target = json
+                    .get_mut("candidates")
+                    .and_then(|c| c.get_mut(0))
+                    .and_then(|c| c.get_mut("content"))
+                    .and_then(|c| c.get_mut("parts"))
+                    .and_then(|p| p.get_mut(*part_index))
+                    .and_then(|p| p.get_mut("functionCall"))
+                    .and_then(|fc| fc.get_mut("args"))
+                    .and_then(|a| a.get_mut(arg_key.as_str()));
+                match target {
+                    Some(v) => *v = Value::String(text.clone()),
+                    None => {
+                        return Err(format!(
+                            "apply_restored_fields: candidates[0].content.parts[{part_index}].functionCall.args.{arg_key} not found"
+                        ));
+                    }
+                }
             }
         }
     }
+    Ok(())
 }
 
 /// Response stream wrapper that auto-detects SSE and applies the correct
@@ -288,8 +520,6 @@ async fn restore_sse(
     session_key: SessionKey,
     provider: Provider,
 ) -> Result<VecDeque<Bytes>, io::Error> {
-    use futures_util::stream;
-
     // Step 1: Split into frames. SSE frames are separated by "\n\n".
     // Include the "\n\n" terminator in each frame for round-trip fidelity.
     let raw_str = String::from_utf8(raw)
@@ -300,23 +530,23 @@ async fn restore_sse(
     let normalized = raw_str.replace("\r\n", "\n");
     let frames: Vec<&str> = normalized.split_inclusive("\n\n").collect();
 
-    // Step 2 & 3: Parse each frame and extract text content.
     struct ParsedFrame {
-        is_text: bool,
+        fields: Vec<FrameFieldContribution>,
         json: Option<serde_json::Value>,
         raw: String,
     }
 
     let mut parsed: Vec<ParsedFrame> = Vec::with_capacity(frames.len());
-    let mut text_buf = String::new();
+    let mut accumulators: HashMap<FieldKey, String> = HashMap::new();
 
     for frame in &frames {
+        let event_type = frame.lines().find_map(|l| l.strip_prefix("event: "));
         let data_content = frame.lines().find_map(|l| l.strip_prefix("data: "));
 
         let Some(data_str) = data_content else {
             // No data line (comment-only frame or keep-alive). Pass through.
             parsed.push(ParsedFrame {
-                is_text: false,
+                fields: vec![],
                 json: None,
                 raw: frame.to_string(),
             });
@@ -327,19 +557,28 @@ async fn restore_sse(
             Err(_) => {
                 // Not JSON (e.g., "data: [DONE]"). Pass through.
                 parsed.push(ParsedFrame {
-                    is_text: false,
+                    fields: vec![],
                     json: None,
                     raw: frame.to_string(),
                 });
             }
             Ok(json) => {
-                let extracted = extract_text_field(&json, provider).map(str::to_owned);
-                let is_text = extracted.is_some();
-                if let Some(ref t) = extracted {
-                    text_buf.push_str(t);
+                let extracted = extract_fields(&json, provider, event_type);
+                let mut contribs: Vec<FrameFieldContribution> = Vec::with_capacity(extracted.len());
+                for field in extracted {
+                    let byte_len = field.text.len();
+                    accumulators
+                        .entry(field.key.clone())
+                        .or_default()
+                        .push_str(&field.text);
+                    contribs.push(FrameFieldContribution {
+                        key: field.key,
+                        byte_len,
+                        write_back: field.write_back,
+                    });
                 }
                 parsed.push(ParsedFrame {
-                    is_text,
+                    fields: contribs,
                     json: Some(json),
                     raw: frame.to_string(),
                 });
@@ -347,8 +586,8 @@ async fn restore_sse(
         }
     }
 
-    // Step 4 & 5: If no text events, nothing to restore — pass frames through.
-    if text_buf.is_empty() {
+    // If no text events found, nothing to restore — pass frames through unchanged.
+    if accumulators.is_empty() {
         let mut queue = VecDeque::new();
         for f in parsed {
             queue.push_back(Bytes::from(f.raw.into_bytes()));
@@ -356,30 +595,48 @@ async fn restore_sse(
         return Ok(queue);
     }
 
-    // Run restore_stream on the concatenated text buffer.
-    let text_bytes = Bytes::from(text_buf.as_bytes().to_vec());
-    let text_stream: ResponseStream =
-        Box::pin(stream::once(
-            async move { Ok::<Bytes, io::Error>(text_bytes) },
-        ));
-    let us = restore_stream(text_stream, entries, session_key)
-        .map_err(|e| io::Error::other(e.to_string()))?;
-    futures_util::pin_mut!(us);
-    let mut restored_bytes: Vec<u8> = Vec::new();
-    while let Some(chunk) = us.next().await {
-        restored_bytes.extend_from_slice(&chunk.map_err(|e| io::Error::other(e.to_string()))?);
+    // Run sync doppel::restore per accumulation buffer.
+    let mut restored_buffers: HashMap<FieldKey, String> = HashMap::new();
+    for (key, buf) in &accumulators {
+        let mut input = std::io::Cursor::new(buf.as_bytes());
+        let mut output = Vec::new();
+        doppel_restore(&mut input, &mut output, &entries, &session_key)
+            .map_err(|e| io::Error::other(e.to_string()))?;
+        let restored = String::from_utf8(output)
+            .map_err(|e| io::Error::other(format!("restore produced non-UTF8: {e}")))?;
+        restored_buffers.insert(key.clone(), restored);
     }
-    let mut restored_text = String::from_utf8(restored_bytes)
-        .map_err(|e| io::Error::other(format!("restore_stream produced non-UTF8 bytes: {e}")))?;
 
-    // Step 6: Redistribute restored text. Strategy: first text event gets all
-    // restored text; subsequent text events get empty string.
-    // This preserves all content while changing event granularity (acceptable).
-    let mut first_text_done = false;
+    debug_assert!(
+        accumulators
+            .iter()
+            .all(|(k, buf)| buf.len() == restored_buffers[k].len()),
+        "structural-equivalence invariant violated: accumulated and restored buffer lengths differ"
+    );
+    // Verify that each key's byte_len contributions sum to the accumulated buffer length.
+    debug_assert!(
+        accumulators.keys().all(|key| {
+            let sum: usize = parsed
+                .iter()
+                .flat_map(|f| f.fields.iter())
+                .filter(|c| &c.key == key)
+                .map(|c| c.byte_len)
+                .sum();
+            sum == accumulators[key].len()
+        }),
+        "per-key byte_len sum must equal accumulated buffer length"
+    );
+
+    // Redistribute restored text back into each frame.
+    // First frame for each key receives the full restored text; subsequent frames
+    // for the same key receive an empty string. This preserves the invariant that
+    // all restored content appears contiguously in the output while supporting
+    // multiple independent field keys.
+    let mut emitted: HashMap<FieldKey, bool> = HashMap::new();
     let mut queue = VecDeque::new();
 
     for mut frame in parsed {
-        if !frame.is_text {
+        if frame.fields.is_empty() {
             queue.push_back(Bytes::from(frame.raw.into_bytes()));
             continue;
         }
@@ -387,21 +644,21 @@ async fn restore_sse(
             queue.push_back(Bytes::from(frame.raw.into_bytes()));
             continue;
         };
-        let new_text = if !first_text_done {
-            first_text_done = true;
-            std::mem::take(&mut restored_text)
-        } else {
-            String::new()
-        };
-        if !set_text_field(&mut json, provider, new_text) {
-            // This branch is unreachable if extract_text_field and set_text_field
-            // are in sync, but the explicit guard surfaces future divergence early.
-            return Err(io::Error::other(format!(
-                "set_text_field failed for provider {provider:?} on frame that extract_text_field accepted"
-            )));
+
+        let mut write_pairs: Vec<(WriteBackInfo, String)> = Vec::new();
+        for contrib in &frame.fields {
+            let already_emitted = emitted.entry(contrib.key.clone()).or_insert(false);
+            let text = if !*already_emitted {
+                *already_emitted = true;
+                restored_buffers[&contrib.key].clone()
+            } else {
+                String::new()
+            };
+            write_pairs.push((contrib.write_back.clone(), text));
         }
-        // Re-serialize: rebuild the frame preserving non-data lines (event:, id:,
-        // retry:) from the original, then append the updated data line.
+        apply_restored_fields(&mut json, &write_pairs).map_err(io::Error::other)?;
+
+        // Reconstruct frame preserving non-data lines
         let prefix_lines: String = frame
             .raw
             .lines()
@@ -460,87 +717,109 @@ mod tests {
     }
 
     #[test]
-    fn extract_anthropic_text_delta() {
+    fn extract_fields_anthropic_text_delta() {
         let v = json!({
             "type": "content_block_delta",
+            "index": 0,
             "delta": { "type": "text_delta", "text": "hello" }
         });
-        assert_eq!(extract_text_field(&v, Provider::Anthropic), Some("hello"));
+        let fields = extract_fields(&v, Provider::Anthropic, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            fields[0].key,
+            FieldKey::AnthropicDelta {
+                delta_type: "text_delta".to_owned(),
+                index: 0
+            }
+        );
+        assert_eq!(fields[0].text, "hello");
     }
 
     #[test]
-    fn extract_anthropic_skips_message_start() {
+    fn extract_fields_anthropic_skips_message_start() {
         let v = json!({ "type": "message_start" });
-        assert_eq!(extract_text_field(&v, Provider::Anthropic), None);
+        assert!(extract_fields(&v, Provider::Anthropic, None).is_empty());
     }
 
     #[test]
-    fn extract_anthropic_skips_content_block_stop() {
+    fn extract_fields_anthropic_skips_content_block_stop() {
         let v = json!({ "type": "content_block_stop", "index": 0 });
-        assert_eq!(extract_text_field(&v, Provider::Anthropic), None);
+        assert!(extract_fields(&v, Provider::Anthropic, None).is_empty());
     }
 
     #[test]
-    fn extract_openai_delta_content() {
+    fn extract_fields_openai_delta_content() {
         let v = json!({ "choices": [{ "delta": { "content": "hi" } }] });
-        assert_eq!(extract_text_field(&v, Provider::OpenAi), Some("hi"));
+        let fields = extract_fields(&v, Provider::OpenAi, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, FieldKey::OpenAiContent);
+        assert_eq!(fields[0].text, "hi");
     }
 
     #[test]
-    fn extract_openai_skips_null_content() {
+    fn extract_fields_openai_skips_null_content() {
         let v = json!({ "choices": [{ "delta": {} }] });
-        assert_eq!(extract_text_field(&v, Provider::OpenAi), None);
+        assert!(extract_fields(&v, Provider::OpenAi, None).is_empty());
     }
 
     #[test]
-    fn extract_gemini_text() {
+    fn extract_fields_gemini_text() {
         let v = json!({
             "candidates": [{ "content": { "parts": [{ "text": "hi" }] } }]
         });
-        assert_eq!(extract_text_field(&v, Provider::Gemini), Some("hi"));
+        let fields = extract_fields(&v, Provider::Gemini, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, FieldKey::GeminiText { thought: false });
+        assert_eq!(fields[0].text, "hi");
     }
 
     #[test]
-    fn extract_gemini_skips_empty_parts() {
+    fn extract_fields_gemini_skips_empty_parts() {
         let v = json!({
             "candidates": [{ "content": { "parts": [] } }]
         });
-        assert_eq!(extract_text_field(&v, Provider::Gemini), None);
+        assert!(extract_fields(&v, Provider::Gemini, None).is_empty());
     }
 
     #[test]
-    fn set_anthropic_text_field_replaces() {
+    fn apply_fields_anthropic_text() {
         let mut v = json!({
             "type": "content_block_delta",
             "delta": { "type": "text_delta", "text": "old" }
         });
-        assert!(set_text_field(
+        apply_restored_fields(
             &mut v,
-            Provider::Anthropic,
-            "new".to_owned()
-        ));
+            &[(
+                WriteBackInfo::AnthropicDelta {
+                    field_name: "text".to_owned(),
+                },
+                "new".to_owned(),
+            )],
+        )
+        .unwrap();
         assert_eq!(v["delta"]["text"], json!("new"));
     }
 
     #[test]
-    fn set_anthropic_returns_false_for_non_text() {
-        let mut v = json!({ "type": "message_start" });
-        assert!(!set_text_field(&mut v, Provider::Anthropic, "x".to_owned()));
-    }
-
-    #[test]
-    fn set_openai_text_field_replaces() {
+    fn apply_fields_openai_content() {
         let mut v = json!({ "choices": [{ "delta": { "content": "old" } }] });
-        assert!(set_text_field(&mut v, Provider::OpenAi, "new".to_owned()));
+        apply_restored_fields(&mut v, &[(WriteBackInfo::OpenAiContent, "new".to_owned())]).unwrap();
         assert_eq!(v["choices"][0]["delta"]["content"], json!("new"));
     }
 
     #[test]
-    fn set_gemini_text_field_replaces() {
+    fn apply_fields_gemini_text() {
         let mut v = json!({
             "candidates": [{ "content": { "parts": [{ "text": "old" }] } }]
         });
-        assert!(set_text_field(&mut v, Provider::Gemini, "new".to_owned()));
+        apply_restored_fields(
+            &mut v,
+            &[(
+                WriteBackInfo::GeminiPartText { part_index: 0 },
+                "new".to_owned(),
+            )],
+        )
+        .unwrap();
         assert_eq!(
             v["candidates"][0]["content"]["parts"][0]["text"],
             json!("new")
