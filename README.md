@@ -128,3 +128,9 @@ secrets_file = "~/.config/lcp/secrets.toml"
 lcp logs `doppel extension loaded` on startup when the file is read successfully.
 If the file is missing or invalid, doppel is disabled with a warning — lcp still
 runs normally, just without secret protection.
+
+## Acknowledgements
+
+Inspired by [llm-cache-proxy](https://github.com/yubinkim444/llm-cache-proxy) by
+[@yubinkim444](https://github.com/yubinkim444) — a Python implementation of the same
+core idea: one env var, dramatically cheaper dev loops.
