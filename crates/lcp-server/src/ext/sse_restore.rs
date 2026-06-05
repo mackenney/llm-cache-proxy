@@ -109,32 +109,70 @@ fn extract_fields(
 ) -> Vec<ExtractedField> {
     match provider {
         Provider::Anthropic => {
-            let Some(event_type) = json["type"].as_str() else {
-                return vec![];
-            };
-            if event_type != "content_block_delta" {
+            if json["type"].as_str() != Some("content_block_delta") {
                 return vec![];
             }
-            let Some(delta_type) = json["delta"]["type"].as_str() else {
-                return vec![];
-            };
-            if delta_type != "text_delta" {
-                return vec![];
-            }
-            let Some(text) = json["delta"]["text"].as_str() else {
-                return vec![];
-            };
             let index = json["index"].as_u64().unwrap_or(0);
-            vec![ExtractedField {
-                key: FieldKey::AnthropicDelta {
-                    delta_type: delta_type.to_owned(),
-                    index,
-                },
-                text: text.to_owned(),
-                write_back: WriteBackInfo::AnthropicDelta {
-                    field_name: "text".to_owned(),
-                },
-            }]
+            let delta = &json["delta"];
+            let delta_type = match delta["type"].as_str() {
+                Some(dt) => dt,
+                None => return vec![],
+            };
+            match delta_type {
+                "text_delta" => {
+                    if let Some(text) = delta["text"].as_str() {
+                        vec![ExtractedField {
+                            key: FieldKey::AnthropicDelta {
+                                delta_type: "text_delta".into(),
+                                index,
+                            },
+                            text: text.to_owned(),
+                            write_back: WriteBackInfo::AnthropicDelta {
+                                field_name: "text".into(),
+                            },
+                        }]
+                    } else {
+                        vec![]
+                    }
+                }
+                "thinking_delta" => {
+                    if let Some(text) = delta["thinking"].as_str() {
+                        vec![ExtractedField {
+                            key: FieldKey::AnthropicDelta {
+                                delta_type: "thinking_delta".into(),
+                                index,
+                            },
+                            text: text.to_owned(),
+                            write_back: WriteBackInfo::AnthropicDelta {
+                                field_name: "thinking".into(),
+                            },
+                        }]
+                    } else {
+                        vec![]
+                    }
+                }
+                "input_json_delta" => {
+                    if let Some(text) = delta["partial_json"].as_str() {
+                        vec![ExtractedField {
+                            key: FieldKey::AnthropicDelta {
+                                delta_type: "input_json_delta".into(),
+                                index,
+                            },
+                            text: text.to_owned(),
+                            write_back: WriteBackInfo::AnthropicDelta {
+                                field_name: "partial_json".into(),
+                            },
+                        }]
+                    } else {
+                        vec![]
+                    }
+                }
+                "signature_delta" => {
+                    // MUST NOT modify — return empty to skip accumulation entirely.
+                    vec![]
+                }
+                _ => vec![],
+            }
         }
         Provider::OpenAi | Provider::OpenRouter => {
             let Some(text) = json
@@ -915,5 +953,97 @@ mod tests {
             stop_frame.contains("event: message_stop\n") && stop_frame.contains("data: "),
             "event: and data: must be in the same frame; got: {stop_frame:?}"
         );
+    }
+
+    #[test]
+    fn extract_fields_anthropic_thinking_delta() {
+        let v = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "thinking_delta", "thinking": "Let me reason..." }
+        });
+        let fields = extract_fields(&v, Provider::Anthropic, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            fields[0].key,
+            FieldKey::AnthropicDelta {
+                delta_type: "thinking_delta".into(),
+                index: 0
+            }
+        );
+        assert_eq!(fields[0].text, "Let me reason...");
+    }
+
+    #[test]
+    fn extract_fields_anthropic_input_json_delta() {
+        let v = json!({
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": { "type": "input_json_delta", "partial_json": "{\"key\":" }
+        });
+        let fields = extract_fields(&v, Provider::Anthropic, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            fields[0].key,
+            FieldKey::AnthropicDelta {
+                delta_type: "input_json_delta".into(),
+                index: 1
+            }
+        );
+        assert_eq!(fields[0].text, "{\"key\":");
+    }
+
+    #[test]
+    fn extract_fields_anthropic_skips_signature_delta() {
+        let v = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "signature_delta", "signature": "bWVzc2FnZV9zaWduYXR1cmU=" }
+        });
+        let fields = extract_fields(&v, Provider::Anthropic, None);
+        assert!(
+            fields.is_empty(),
+            "signature_delta MUST be passed through unmodified"
+        );
+    }
+
+    #[test]
+    fn apply_fields_anthropic_thinking() {
+        let mut v = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "thinking_delta", "thinking": "old" }
+        });
+        apply_restored_fields(
+            &mut v,
+            &[(
+                WriteBackInfo::AnthropicDelta {
+                    field_name: "thinking".into(),
+                },
+                "new thought".to_owned(),
+            )],
+        )
+        .unwrap();
+        assert_eq!(v["delta"]["thinking"], json!("new thought"));
+    }
+
+    #[test]
+    fn apply_fields_anthropic_input_json() {
+        let mut v = json!({
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": { "type": "input_json_delta", "partial_json": "old" }
+        });
+        apply_restored_fields(
+            &mut v,
+            &[(
+                WriteBackInfo::AnthropicDelta {
+                    field_name: "partial_json".into(),
+                },
+                "{\"restored\":true}".to_owned(),
+            )],
+        )
+        .unwrap();
+        assert_eq!(v["delta"]["partial_json"], json!("{\"restored\":true}"));
     }
 }
