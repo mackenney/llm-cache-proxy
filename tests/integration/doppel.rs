@@ -16,10 +16,8 @@ use lcp_server::{DoppelExt, ExtensionPipeline};
 
 use crate::common::{MockUpstream, TestHarness};
 
-// ---------------------------------------------------------------------------
 // Synthetic test secrets — NOT real credentials.
 // Structures match the built-in patterns of doppel exactly.
-// ---------------------------------------------------------------------------
 
 /// Anthropic API key (sk-ant-api03-…)
 const ANT: &[u8] =
@@ -49,9 +47,7 @@ const TIER2_TOKEN: &[u8] = b"my-internal-bearer-token-abcdef1234567890-for-e2e-t
 /// registered: a UUID-style identifier (enough bytes for registered registration)
 const TIER2_UUID_LIKE: &[u8] = b"f47ac10b-58cc-4372-a567-0e02b2c3d479abcdef0123456789";
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 /// Assert that `haystack` contains none of the byte sequences in `needles`.
 fn assert_absent(haystack: &[u8], needles: &[&[u8]], ctx: &str) {
@@ -73,9 +69,7 @@ fn assert_present(haystack: &[u8], needles: &[&[u8]], ctx: &str) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Per-morphology wire tests: upstream receives a fake, never the real secret
-// ---------------------------------------------------------------------------
 
 macro_rules! wire_doppel_test {
     ($name:ident, $secret:expr, $patterns:expr) => {
@@ -198,9 +192,7 @@ async fn wire_openai_project_key_swapped() {
     assert_absent(upstream_body, &[&key], "upstream body (openai project key)");
 }
 
-// ---------------------------------------------------------------------------
 // Multiple secrets in the same payload — all swapped
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn wire_multiple_secrets_all_swapped() {
@@ -247,9 +239,7 @@ async fn wire_multiple_secrets_all_swapped() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // Tier 1 + registered in same payload
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn wire_pattern_and_registered_in_same_payload() {
@@ -297,9 +287,7 @@ async fn wire_pattern_and_registered_in_same_payload() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // Unregistered secret passes through untouched
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn wire_unregistered_secret_passes_through() {
@@ -349,9 +337,7 @@ async fn wire_unregistered_secret_passes_through() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // Phase 3: response containing the fake is restored for the client
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn client_receives_restored_secret_in_response() {
@@ -397,9 +383,7 @@ async fn client_receives_restored_secret_in_response() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // Cache stores restored content (originals, not fakes)
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn cache_stores_restored_content_not_fake() {
@@ -524,9 +508,7 @@ async fn sse_cache_stores_restored_content_not_fake() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // Cache HIT replays restored content
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn cache_hit_replays_restored_content() {
@@ -583,10 +565,8 @@ async fn cache_hit_replays_restored_content() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // Different secrets → different cache keys
 // (swapping is Phase 2 — cache key is derived from the original body)
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn different_secrets_produce_different_cache_keys() {
@@ -660,9 +640,7 @@ async fn different_secrets_produce_different_cache_keys() {
     assert_eq!(harness.cache().list_entries().unwrap().len(), 2);
 }
 
-// ---------------------------------------------------------------------------
 // Payload without any detectable secret passes through completely unchanged
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn clean_payload_passes_through_unmodified() {
@@ -699,9 +677,7 @@ async fn clean_payload_passes_through_unmodified() {
     );
 }
 
-// ---------------------------------------------------------------------------
 // Phase 3 / SSE: fake split across Anthropic content_block_delta events
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn restore_returns_secret_from_anthropic_sse_stream() {
@@ -2142,4 +2118,64 @@ async fn cross_field_isolation_anthropic_text_and_thinking() {
         "text field: original must be restored",
     );
     assert_absent(&resp_bytes, &[&fake1, &fake2], "no fakes in output");
+}
+
+#[tokio::test]
+async fn restore_openai_refusal() {
+    // VC-SSE-6b: choices[0].delta.refusal content must be restored.
+    use doppel::swap as doppel_swap;
+
+    let pat = patterns::openai_classic();
+    let body_bytes = [b"key: ".as_slice(), OPENAI_CLASSIC].concat();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    let sse_chunks = vec![
+        format!(concat!(
+            "data: {{\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",",
+            "\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,",
+            "\"delta\":{{\"refusal\":\"{}\"}},\"finish_reason\":null}}]}}\n\n"
+        ), fake_str),
+        "data: {\"id\":\"chatcmpl-x\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n".to_owned(),
+        "data: [DONE]\n\n".to_owned(),
+    ];
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"gpt-4o","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"key={}"}}]}}"#,
+        String::from_utf8_lossy(OPENAI_CLASSIC)
+    );
+
+    let resp = client
+        .post(format!(
+            "{}/openai/v1/chat/completions",
+            harness.proxy_url()
+        ))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[OPENAI_CLASSIC],
+        "refusal: Phase 3 must restore original secret",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "refusal: swapped fake must not be visible to client",
+    );
 }

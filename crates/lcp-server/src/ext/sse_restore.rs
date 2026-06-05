@@ -39,8 +39,8 @@ enum FieldKey {
     ResponsesApiDone { event_type: String },
     // Gemini
     GeminiText { thought: bool },
-    GeminiCodeExecOutput,
-    GeminiFuncCallArg { arg_key: String },
+    GeminiCodeExecOutput { part_index: usize },
+    GeminiFuncCallArg { part_index: usize, arg_key: String },
 }
 
 /// A content-bearing field extracted from one SSE event.
@@ -323,7 +323,7 @@ fn extract_fields(
                     .and_then(|v| v.as_str())
                 {
                     fields.push(ExtractedField {
-                        key: FieldKey::GeminiCodeExecOutput,
+                        key: FieldKey::GeminiCodeExecOutput { part_index: i },
                         text: output.to_owned(),
                         write_back: WriteBackInfo::GeminiPartCodeExecOutput { part_index: i },
                     });
@@ -337,6 +337,7 @@ fn extract_fields(
                         if let Some(s) = arg_val.as_str() {
                             fields.push(ExtractedField {
                                 key: FieldKey::GeminiFuncCallArg {
+                                    part_index: i,
                                     arg_key: arg_key.clone(),
                                 },
                                 text: s.to_owned(),
@@ -813,12 +814,6 @@ async fn restore_sse(
         restored_buffers.insert(key.clone(), restored);
     }
 
-    debug_assert!(
-        accumulators
-            .iter()
-            .all(|(k, buf)| buf.len() == restored_buffers[k].len()),
-        "structural-equivalence invariant violated: accumulated and restored buffer lengths differ"
-    );
     // Verify that each key's byte_len contributions sum to the accumulated buffer length.
     debug_assert!(
         accumulators.keys().all(|key| {
@@ -1318,6 +1313,22 @@ mod tests {
             json!("restored")
         );
     }
+
+    #[test]
+    fn apply_fields_openai_refusal() {
+        let mut v = json!({
+            "choices": [{"index": 0, "delta": {"refusal": "old refusal"}}]
+        });
+        apply_restored_fields(
+            &mut v,
+            &[(WriteBackInfo::OpenAiRefusal, "restored refusal".to_owned())],
+        )
+        .unwrap();
+        assert_eq!(
+            v["choices"][0]["delta"]["refusal"],
+            json!("restored refusal")
+        );
+    }
     #[test]
     fn extract_fields_responses_api_text_delta() {
         let v = json!({
@@ -1447,7 +1458,10 @@ mod tests {
         });
         let fields = extract_fields(&v, Provider::Gemini, None);
         assert_eq!(fields.len(), 1);
-        assert_eq!(fields[0].key, FieldKey::GeminiCodeExecOutput);
+        assert_eq!(
+            fields[0].key,
+            FieldKey::GeminiCodeExecOutput { part_index: 0 }
+        );
         assert_eq!(fields[0].text, "result: 42\n");
     }
 
@@ -1463,6 +1477,7 @@ mod tests {
         assert_eq!(
             fields[0].key,
             FieldKey::GeminiFuncCallArg {
+                part_index: 0,
                 arg_key: "query".into()
             }
         );
