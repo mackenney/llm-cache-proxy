@@ -292,17 +292,63 @@ fn extract_fields(
             fields
         }
         Provider::Gemini => {
-            let Some(text) = json
-                .pointer("/candidates/0/content/parts/0/text")
-                .and_then(Value::as_str)
-            else {
-                return vec![];
+            let parts = match json
+                .pointer("/candidates/0/content/parts")
+                .and_then(|v| v.as_array())
+            {
+                Some(p) => p,
+                None => return vec![],
             };
-            vec![ExtractedField {
-                key: FieldKey::GeminiText { thought: false },
-                text: text.to_owned(),
-                write_back: WriteBackInfo::GeminiPartText { part_index: 0 },
-            }]
+
+            let mut fields = Vec::new();
+
+            for (i, part) in parts.iter().enumerate() {
+                if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                    let thought = part
+                        .get("thought")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    fields.push(ExtractedField {
+                        key: FieldKey::GeminiText { thought },
+                        text: text.to_owned(),
+                        write_back: WriteBackInfo::GeminiPartText { part_index: i },
+                    });
+                }
+
+                if let Some(output) = part
+                    .pointer("/codeExecutionResult/output")
+                    .and_then(|v| v.as_str())
+                {
+                    fields.push(ExtractedField {
+                        key: FieldKey::GeminiCodeExecOutput,
+                        text: output.to_owned(),
+                        write_back: WriteBackInfo::GeminiPartCodeExecOutput { part_index: i },
+                    });
+                }
+
+                if let Some(args) = part
+                    .pointer("/functionCall/args")
+                    .and_then(|v| v.as_object())
+                {
+                    for (arg_key, arg_val) in args {
+                        if let Some(s) = arg_val.as_str() {
+                            fields.push(ExtractedField {
+                                key: FieldKey::GeminiFuncCallArg {
+                                    arg_key: arg_key.clone(),
+                                },
+                                text: s.to_owned(),
+                                write_back: WriteBackInfo::GeminiPartFuncCallArg {
+                                    part_index: i,
+                                    arg_key: arg_key.clone(),
+                                },
+                            });
+                        }
+                        // Non-string values (numbers, booleans, objects) are skipped.
+                    }
+                }
+            }
+
+            fields
         }
     }
 }
@@ -1371,5 +1417,154 @@ mod tests {
         )
         .unwrap();
         assert_eq!(v["text"], json!("restored full text"));
+    }
+
+    #[test]
+    fn extract_fields_gemini_multi_part_text() {
+        let v = json!({
+            "candidates": [{"content": {"parts": [
+                {"text": "thought", "thought": true},
+                {"text": "answer"}
+            ]}}]
+        });
+        let fields = extract_fields(&v, Provider::Gemini, None);
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].key, FieldKey::GeminiText { thought: true });
+        assert_eq!(fields[0].text, "thought");
+        assert_eq!(fields[1].key, FieldKey::GeminiText { thought: false });
+        assert_eq!(fields[1].text, "answer");
+    }
+
+    #[test]
+    fn extract_fields_gemini_code_execution_output() {
+        let v = json!({
+            "candidates": [{"content": {"parts": [
+                {"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "result: 42\n"}}
+            ]}}]
+        });
+        let fields = extract_fields(&v, Provider::Gemini, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, FieldKey::GeminiCodeExecOutput);
+        assert_eq!(fields[0].text, "result: 42\n");
+    }
+
+    #[test]
+    fn extract_fields_gemini_function_call_args() {
+        let v = json!({
+            "candidates": [{"content": {"parts": [
+                {"functionCall": {"name": "lookup", "args": {"query": "New York", "count": 5}}}
+            ]}}]
+        });
+        let fields = extract_fields(&v, Provider::Gemini, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            fields[0].key,
+            FieldKey::GeminiFuncCallArg {
+                arg_key: "query".into()
+            }
+        );
+        assert_eq!(fields[0].text, "New York");
+    }
+
+    #[test]
+    fn extract_fields_gemini_skips_thought_signature() {
+        let v = json!({
+            "candidates": [{"content": {"parts": [{"text": "answer"}]}}],
+            "thoughtSignature": "base64signature=="
+        });
+        let fields = extract_fields(&v, Provider::Gemini, None);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].key, FieldKey::GeminiText { thought: false });
+    }
+
+    #[test]
+    fn extract_fields_gemini_skips_grounding_metadata() {
+        let v = json!({
+            "candidates": [{"content": {"parts": [{"text": "answer"}]}}],
+            "groundingMetadata": {"searchEntryPoint": {"renderedContent": "<html>"}}
+        });
+        let fields = extract_fields(&v, Provider::Gemini, None);
+        assert_eq!(fields.len(), 1);
+    }
+
+    #[test]
+    fn apply_fields_gemini_multi_part() {
+        let mut v = json!({
+            "candidates": [{"content": {"parts": [
+                {"text": "old_thought", "thought": true},
+                {"text": "old_answer"}
+            ]}}]
+        });
+        apply_restored_fields(
+            &mut v,
+            &[
+                (
+                    WriteBackInfo::GeminiPartText { part_index: 0 },
+                    "new_thought".to_owned(),
+                ),
+                (
+                    WriteBackInfo::GeminiPartText { part_index: 1 },
+                    "new_answer".to_owned(),
+                ),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            v["candidates"][0]["content"]["parts"][0]["text"],
+            json!("new_thought")
+        );
+        assert_eq!(
+            v["candidates"][0]["content"]["parts"][1]["text"],
+            json!("new_answer")
+        );
+    }
+
+    #[test]
+    fn apply_fields_gemini_code_exec_output() {
+        let mut v = json!({
+            "candidates": [{"content": {"parts": [
+                {"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "old"}}
+            ]}}]
+        });
+        apply_restored_fields(
+            &mut v,
+            &[(
+                WriteBackInfo::GeminiPartCodeExecOutput { part_index: 0 },
+                "restored output".to_owned(),
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            v["candidates"][0]["content"]["parts"][0]["codeExecutionResult"]["output"],
+            json!("restored output")
+        );
+    }
+
+    #[test]
+    fn apply_fields_gemini_func_call_arg() {
+        let mut v = json!({
+            "candidates": [{"content": {"parts": [
+                {"functionCall": {"name": "lookup", "args": {"query": "old", "count": 5}}}
+            ]}}]
+        });
+        apply_restored_fields(
+            &mut v,
+            &[(
+                WriteBackInfo::GeminiPartFuncCallArg {
+                    part_index: 0,
+                    arg_key: "query".into(),
+                },
+                "restored query".to_owned(),
+            )],
+        )
+        .unwrap();
+        assert_eq!(
+            v["candidates"][0]["content"]["parts"][0]["functionCall"]["args"]["query"],
+            json!("restored query")
+        );
+        assert_eq!(
+            v["candidates"][0]["content"]["parts"][0]["functionCall"]["args"]["count"],
+            json!(5)
+        );
     }
 }

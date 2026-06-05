@@ -1670,3 +1670,273 @@ async fn restore_openai_responses_api_reasoning_delta() {
         "Responses API reasoning_summary_text.delta: swapped fake must not be visible",
     );
 }
+
+#[tokio::test]
+async fn restore_gemini_multi_part_text() {
+    // VC-SSE-9: parts[N].text with thought:true/false must be restored across split SSE frames.
+    use doppel::swap as doppel_swap;
+
+    let pat = patterns::gcp();
+    let body_bytes = [b"key: ".as_slice(), GCP].concat();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    let n = fake_str.len() / 4;
+    let parts = [
+        fake_str[..n].to_owned(),
+        fake_str[n..2 * n].to_owned(),
+        fake_str[2 * n..3 * n].to_owned(),
+        fake_str[3 * n..].to_owned(),
+    ];
+
+    let mut sse_chunks: Vec<String> = Vec::new();
+    for part in &parts {
+        sse_chunks.push(format!(
+            "data: {{\"candidates\":[{{\"content\":{{\"parts\":[{{\"text\":\"{part}\",\"thought\":true}}],\"role\":\"model\"}}}}]}}\n\n"
+        ));
+    }
+    for part in &parts {
+        sse_chunks.push(format!(
+            "data: {{\"candidates\":[{{\"content\":{{\"parts\":[{{\"text\":\"{part}\"}}],\"role\":\"model\"}}}}]}}\n\n"
+        ));
+    }
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"contents":[{{"parts":[{{"text":"key={}"}}]}}]}}"#,
+        String::from_utf8_lossy(GCP)
+    );
+
+    let resp = client
+        .post(format!(
+            "{}/gemini/v1/models/gemini-2.5-pro:streamGenerateContent",
+            harness.proxy_url()
+        ))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[GCP],
+        "Gemini multi-part text: Phase 3 must restore original secret",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "Gemini multi-part text: swapped fake must not be visible",
+    );
+}
+
+#[tokio::test]
+async fn restore_gemini_code_execution_output() {
+    // VC-SSE-10: codeExecutionResult.output must be restored.
+    use doppel::swap as doppel_swap;
+
+    let pat = patterns::gcp();
+    let body_bytes = [b"key: ".as_slice(), GCP].concat();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    let sse_chunks = vec![format!(
+        "data: {{\"candidates\":[{{\"content\":{{\"parts\":[{{\"codeExecutionResult\":{{\"outcome\":\"OUTCOME_OK\",\"output\":\"{fake_str}\"}}}}],\"role\":\"model\"}}}}]}}\n\n"
+    )];
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"contents":[{{"parts":[{{"text":"key={}"}}]}}]}}"#,
+        String::from_utf8_lossy(GCP)
+    );
+
+    let resp = client
+        .post(format!(
+            "{}/gemini/v1/models/gemini-2.5-pro:streamGenerateContent",
+            harness.proxy_url()
+        ))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[GCP],
+        "Gemini code execution output: Phase 3 must restore original secret",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "Gemini code execution output: swapped fake must not be visible",
+    );
+}
+
+#[tokio::test]
+async fn restore_gemini_function_call_args() {
+    // VC-SSE-11: functionCall.args string values must be restored; non-string values unmodified.
+    use doppel::swap as doppel_swap;
+
+    let pat = patterns::gcp();
+    let body_bytes = [b"key: ".as_slice(), GCP].concat();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    let sse_chunks = vec![format!(
+        "data: {{\"candidates\":[{{\"content\":{{\"parts\":[{{\"functionCall\":{{\"name\":\"lookup\",\"args\":{{\"query\":\"{fake_str}\",\"count\":5}}}}}}],\"role\":\"model\"}}}}]}}\n\n"
+    )];
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"contents":[{{"parts":[{{"text":"key={}"}}]}}]}}"#,
+        String::from_utf8_lossy(GCP)
+    );
+
+    let resp = client
+        .post(format!(
+            "{}/gemini/v1/models/gemini-2.5-pro:streamGenerateContent",
+            harness.proxy_url()
+        ))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[GCP],
+        "Gemini function call args: Phase 3 must restore original secret",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "Gemini function call args: swapped fake must not be visible",
+    );
+    assert_present(
+        &resp_bytes,
+        &[b"\"count\":5"],
+        "Gemini function call args: non-string value count:5 must be present unchanged",
+    );
+}
+
+#[tokio::test]
+async fn passthrough_gemini_metadata_fields() {
+    // VC-SSE-12: thoughtSignature and groundingMetadata MUST pass through unchanged.
+    use doppel::swap as doppel_swap;
+
+    let pat = patterns::gcp();
+    let body_bytes = [b"key: ".as_slice(), GCP].concat();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    let n = fake_str.len() / 4;
+    let parts = [
+        fake_str[..n].to_owned(),
+        fake_str[n..2 * n].to_owned(),
+        fake_str[2 * n..3 * n].to_owned(),
+        fake_str[3 * n..].to_owned(),
+    ];
+
+    let mut sse_chunks: Vec<String> = Vec::new();
+    for part in parts[..3].iter() {
+        sse_chunks.push(format!(
+            "data: {{\"candidates\":[{{\"content\":{{\"parts\":[{{\"text\":\"{part}\"}}],\"role\":\"model\"}}}}]}}\n\n"
+        ));
+    }
+    sse_chunks.push(format!(
+        "data: {{\"candidates\":[{{\"content\":{{\"parts\":[{{\"text\":\"{last}\"}}],\"role\":\"model\"}}}}],\"thoughtSignature\":\"{fake_str}\",\"groundingMetadata\":{{\"searchEntryPoint\":{{\"renderedContent\":\"{fake_str}\"}}}}}}\n\n",
+        last = parts[3]
+    ));
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"contents":[{{"parts":[{{"text":"key={}"}}]}}]}}"#,
+        String::from_utf8_lossy(GCP)
+    );
+
+    let resp = client
+        .post(format!(
+            "{}/gemini/v1/models/gemini-2.5-pro:streamGenerateContent",
+            harness.proxy_url()
+        ))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[GCP],
+        "Gemini metadata passthrough: text content must be restored to original secret",
+    );
+
+    let resp_str = std::str::from_utf8(&resp_bytes).unwrap();
+    let last_frame = resp_str
+        .split("\n\n")
+        .filter(|f| !f.is_empty())
+        .last()
+        .unwrap();
+    let data_line = last_frame
+        .lines()
+        .find_map(|l| l.strip_prefix("data: "))
+        .expect("last frame must have a data line");
+    let last_json: serde_json::Value =
+        serde_json::from_str(data_line).expect("last frame data must be valid JSON");
+    assert_eq!(
+        last_json["thoughtSignature"],
+        serde_json::json!(fake_str),
+        "thoughtSignature must pass through unchanged (still contains fake)",
+    );
+    assert_eq!(
+        last_json["groundingMetadata"]["searchEntryPoint"]["renderedContent"],
+        serde_json::json!(fake_str),
+        "groundingMetadata must pass through unchanged (still contains fake)",
+    );
+}
