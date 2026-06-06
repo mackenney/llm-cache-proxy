@@ -107,14 +107,11 @@ struct DoppelConfig {
 
 /// Scan argv for `--config <path>` or `--config=<path>` without a full parse.
 /// Used before the tokio runtime starts so env-var seeding is single-threaded.
+///
+/// Precedence matches the global rule: CLI flag > env var.
 fn config_path_from_args() -> Option<PathBuf> {
     let args: Vec<String> = std::env::args().collect();
-    // Also honour LCP_CONFIG env var at this stage.
-    if let Ok(v) = std::env::var("LCP_CONFIG") {
-        if !v.is_empty() {
-            return Some(PathBuf::from(v));
-        }
-    }
+    // CLI flag wins — check argv first.
     let mut iter = args.iter().peekable();
     while let Some(arg) = iter.next() {
         if arg == "--config" {
@@ -122,6 +119,12 @@ fn config_path_from_args() -> Option<PathBuf> {
         }
         if let Some(path) = arg.strip_prefix("--config=") {
             return Some(PathBuf::from(path));
+        }
+    }
+    // Fall back to LCP_CONFIG env var.
+    if let Ok(v) = std::env::var("LCP_CONFIG") {
+        if !v.is_empty() {
+            return Some(PathBuf::from(v));
         }
     }
     None

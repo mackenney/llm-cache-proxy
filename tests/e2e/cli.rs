@@ -11,7 +11,11 @@ use std::io::Write;
 use tempfile::NamedTempFile;
 
 fn lcp() -> Command {
-    Command::cargo_bin("lcp").expect("lcp binary not found; run `cargo build --bin lcp` first")
+    let mut cmd =
+        Command::cargo_bin("lcp").expect("lcp binary not found; run `cargo build --bin lcp` first");
+    // Isolate from the real user config; individual tests override via --config or LCP_CONFIG.
+    cmd.env("LCP_CONFIG", "/dev/null");
+    cmd
 }
 
 fn write_config(content: &str) -> NamedTempFile {
@@ -255,4 +259,30 @@ fn lcp_config_env_var_loads_file() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("port = 9005"), "stdout:\n{stdout}");
+}
+
+// --config CLI flag beats LCP_CONFIG env var (CLI > env precedence for config path)
+
+#[test]
+fn cli_config_flag_beats_lcp_config_env_var() {
+    let env_cfg = write_config("port = 9010\n");
+    let flag_cfg = write_config("port = 9011\n");
+    let out = lcp()
+        .env("LCP_CONFIG", env_cfg.path().to_str().unwrap())
+        .args([
+            "--config",
+            flag_cfg.path().to_str().unwrap(),
+            "--print-config",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("port = 9011"),
+        "--config flag must beat LCP_CONFIG env var; stdout:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("port = 9010"),
+        "LCP_CONFIG env var must not win over --config flag; stdout:\n{stdout}"
+    );
 }
