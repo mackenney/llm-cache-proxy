@@ -296,54 +296,184 @@ wire carried only fakes.
 
 ### SSE-Aware Restore
 
-`DoppelExt::on_response_stream` MUST apply restoring at the **semantic SSE text level**
-for responses where the first bytes of the stream match the `data: ` or `event: ` SSE
-prefix. Anthropic's real API starts each event with a named `event:` line (e.g.,
-`event: message_start`) before the `data:` line, so the first bytes of the stream are
-`event: ` rather than `data: `.
-The raw-byte Aho-Corasick approach (`restore_stream`) remains in use for non-SSE responses,
-where it works correctly. The two paths are selected automatically; no configuration is
-required.
+Phase 3 MUST apply restoring at the **semantic SSE text level** for
+responses where the first bytes of the stream match the `data: ` or `event: `
+SSE prefix. Anthropic streams begin with a named `event:` line (e.g.,
+`event: message_start`) before the `data:` line, so the first bytes are
+`event: ` rather than `data: `. The non-SSE (plain JSON) response path MUST
+continue to use byte-level restore unchanged — it works correctly there.
 
-**Problem.** `restore_stream` is a raw byte-level Aho-Corasick scanner. It correctly
-restores fakes that span HTTP chunk boundaries (the fake is still a contiguous byte
-sequence across chunk edges). It does NOT work for SSE streaming responses.
+**Problem.** Byte-level restore works for non-SSE responses where the full
+fake appears as a contiguous byte sequence. In SSE streaming responses, text
+content is delivered token-by-token inside individual `data:` events. Each
+event carries only a fragment of the fake, separated by SSE framing bytes.
+The full fake never appears as a contiguous byte sequence in the raw stream,
+so byte-level matching fails silently — passing fakes to the client and
+writing them to the cache.
 
-When an upstream sends `content-type: text/event-stream`, text content is delivered
-token-by-token inside individual `data:` events. If a swapped fake key is echoed back
-by the model, each event carries only a fragment of the fake, separated from the next
-fragment by SSE framing bytes (`}\n\ndata: {…`). The full fake key never appears as
-a contiguous byte sequence in the raw stream, so Aho-Corasick never matches it. Phase 3
-silently passes the fake to the client and writes it to the cache.
-
-**Requirement.** For `content-type: text/event-stream` responses, Phase 3 MUST apply
-restoring at the **semantic SSE text level**:
+**Semantic restore procedure:**
 
 1. Parse each `data:` line as a JSON object.
-2. Locate the provider-specific text field (see table).
-3. Accumulate text across consecutive events; a fake may begin in one event and end
-   in a later one.
-4. When a complete fake is detected, replace it with the decrypted original.
+2. Locate all applicable provider-specific content fields (see tables below).
+3. Accumulate text from each content field independently across consecutive
+   events; a fake may begin in one event and end in a later one.
+4. When a complete fake is detected in the accumulated text, replace it with
+   the decrypted original.
 5. Re-encode the corrected text back into the SSE event and emit it.
 
-The non-SSE (plain JSON) response path MUST continue to use `restore_stream`
-unchanged — it works correctly there.
+#### Provider Content Fields
 
-**Provider SSE text paths:**
+Every field listed as MUST below MUST have its text extracted, accumulated,
+and restored. Fields listed as MUST NOT MUST be passed through byte-for-byte
+unmodified — even if their content coincidentally matches a fake pattern.
 
-| Provider | Text field path | Applicable event condition |
+##### Anthropic
+
+All content fields below appear within events where `type == "content_block_delta"`.
+
+| `delta.type` | Content field | Requirement |
 |---|---|---|
-| Anthropic | `delta.text` | `type == "content_block_delta"` and `delta.type == "text_delta"` |
-| OpenAI | `choices[0].delta.content` | streaming chat completion delta |
-| OpenRouter | `choices[0].delta.content` | OpenAI-compatible |
-| Gemini | `candidates[0].content.parts[0].text` | streaming generate-content response |
+| `text_delta` | `delta.text` | MUST restore |
+| `thinking_delta` | `delta.thinking` | MUST restore |
+| `input_json_delta` | `delta.partial_json` | MUST restore |
+| `signature_delta` | `delta.signature` | MUST NOT modify |
 
-**Implementation.** `DoppelExt::on_response_stream` wraps the response stream in
-`SseRestoreStream`, which auto-detects the response type by peeking at the first bytes
-(detecting both `data: ` and `event: ` SSE prefixes).
-For SSE streams it buffers all frames, accumulates provider text fields across events,
-runs `restore_stream` on the concatenated text, then redistributes the restored text back
-into the original frames (all restored text is placed in the first text event; subsequent
-text events carry an empty string). For non-SSE streams the raw bytes are passed through
-`restore_stream` unchanged. Integration tests cover all four providers: Anthropic, OpenAI,
-OpenRouter (identical format to OpenAI), and Gemini.
+A single Anthropic response MAY interleave blocks of different delta types
+(e.g., a sequence of `thinking_delta` events followed by `text_delta` events).
+Each content field MUST be accumulated independently, keyed by the combination
+of `delta.type` and the `index` field that identifies the content block.
+
+##### OpenAI / OpenRouter — Chat Completions
+
+These fields appear in streaming chat completion delta events.
+
+| Content field | Requirement |
+|---|---|
+| `choices[0].delta.content` | MUST restore |
+| `choices[0].delta.tool_calls[N].function.arguments` | MUST restore |
+| `choices[0].delta.reasoning_content` | MUST restore |
+| `choices[0].delta.function_call.arguments` | MUST restore |
+| `choices[0].delta.refusal` | MUST restore |
+
+OpenRouter uses the OpenAI-compatible chat completion format. The same field
+extraction rules apply under the OpenRouter provider.
+
+`tool_calls` is an array; each element carries an `index` field identifying
+which tool call it belongs to. Text MUST be accumulated independently per
+tool-call index.
+
+##### OpenAI — Responses API (`v1/responses`)
+
+The Responses API uses a wholly different event schema from chat completions.
+It does not use a `choices` array. Provider-aware SSE text extraction MUST
+handle it as a distinct format under the OpenAI provider.
+
+| Event type (SSE `event:` field) | Content field | Requirement |
+|---|---|---|
+| `response.output_text.delta` | `delta` (top-level string) | MUST restore |
+| `response.output_text.done` | `text` (top-level string) | MUST restore |
+| `response.reasoning_summary_text.delta` | `delta` (top-level string) | MUST restore |
+
+Responses API events MUST be distinguished from chat completion events by
+their SSE `event:` line. Chat completions either omit the `event:` line or
+use a non-`response.*` event type. A Responses API event is any event whose
+`event:` value starts with `response.`.
+
+When a Responses API stream is detected, the chat-completion field paths
+(`choices[0].delta.*`) MUST NOT be applied — they would silently find nothing
+and leave all fakes unrestored.
+
+##### Gemini
+
+Content appears in the `candidates[0].content.parts` array. Unlike other
+providers, a single Gemini event MAY include multiple parts.
+
+| Content field | Requirement |
+|---|---|
+| `candidates[0].content.parts[N].text` | MUST restore (all N) |
+| `candidates[0].content.parts[N].functionCall.args.*` | MUST restore (string values only) |
+| `candidates[0].content.parts[N].codeExecutionResult.output` | MUST restore |
+| `candidates[0].content.parts[N].executableCode.code` | SHOULD restore |
+| `thoughtSignature` (top-level) | MUST NOT modify |
+| `groundingMetadata` (top-level) | MUST NOT modify |
+
+When `includeThoughts: true` is set in the request, the `parts` array MAY contain
+thought content in earlier indices and answer content in later indices. Restore MUST
+apply to ALL parts with a `text` field regardless of array index — not only
+`parts[0]`. E2E tests MUST set `includeThoughts: true` to exercise this path.
+
+For `functionCall.args`, restore MUST apply to all string-typed values within
+the `args` object. A secret appearing as a string value in a JSON object is a
+contiguous byte sequence in the concatenated text buffer — no JSON-aware traversal
+is required; the standard byte-level restore guarantee (buffering until no partial
+match is possible) is sufficient. Non-string values MUST NOT be modified.
+
+#### Multi-Field Accumulation
+
+A single response stream MAY contain multiple independent content-bearing
+fields (e.g., an Anthropic response with both `thinking_delta` and
+`text_delta` blocks, or an OpenAI response with `content` and `tool_calls`).
+Each distinct content field MUST maintain its own independent accumulation
+buffer. Fakes MUST NOT be matched across the boundaries of different content
+fields.
+
+#### Verifiable Conditions
+
+**VC-SSE-1 (Anthropic thinking).** An Anthropic response containing a swapped
+fake split across `thinking_delta` events (`delta.thinking` field) MUST have
+the fake fully restored in the output.
+
+**VC-SSE-2 (Anthropic tool use).** An Anthropic response containing a swapped
+fake split across `input_json_delta` events (`delta.partial_json` field) MUST
+have the fake fully restored in the output.
+
+**VC-SSE-3 (Anthropic signature passthrough).** An Anthropic `signature_delta`
+event MUST pass through with its `delta.signature` field byte-for-byte
+unmodified, even if the signature bytes coincidentally match a fake pattern.
+
+**VC-SSE-4 (OpenAI tool calls).** An OpenAI chat completion response
+containing a swapped fake split across `tool_calls[0].function.arguments`
+delta events MUST have the fake fully restored.
+
+**VC-SSE-5 (OpenAI/OpenRouter reasoning).** An OpenAI or OpenRouter response
+containing a swapped fake split across `reasoning_content` delta events MUST
+have the fake fully restored.
+
+**VC-SSE-6 (OpenAI deprecated function_call).** An OpenAI response containing
+a swapped fake split across `function_call.arguments` delta events MUST have
+the fake fully restored.
+
+
+**VC-SSE-6b (OpenAI refusal).** An OpenAI response containing a swapped fake
+in the `choices[0].delta.refusal` field MUST have the fake fully restored.
+**VC-SSE-7 (Responses API text).** An OpenAI Responses API stream
+(`v1/responses`) containing a swapped fake split across
+`response.output_text.delta` events MUST have the fake fully restored. The
+corresponding `response.output_text.done` event MUST also contain restored
+text.
+
+**VC-SSE-8 (Responses API reasoning).** An OpenAI Responses API stream
+containing a swapped fake split across
+`response.reasoning_summary_text.delta` events MUST have the fake fully
+restored.
+
+**VC-SSE-9 (Gemini multi-part text).** A Gemini response with thought content
+in `parts[0].text` and answer content in `parts[1].text` MUST restore fakes
+in both parts, not only `parts[0]`.
+
+**VC-SSE-10 (Gemini code execution output).** A Gemini response containing a
+swapped fake in `codeExecutionResult.output` MUST have the fake fully
+restored.
+
+**VC-SSE-11 (Gemini tool call args).** A Gemini response containing a swapped
+fake in string values of `functionCall.args` MUST have the fake fully
+restored. Non-string arg values MUST be byte-for-byte unmodified.
+
+**VC-SSE-12 (Gemini metadata passthrough).** Gemini `thoughtSignature` and
+`groundingMetadata` fields MUST pass through byte-for-byte unmodified.
+
+**VC-SSE-13 (cross-field isolation).** When a response contains multiple
+independent content fields (e.g., both `delta.content` and
+`tool_calls[0].function.arguments`), fakes in each field MUST be restored
+independently. A partial fake at the end of one field's accumulation MUST NOT
+match against text from a different field.

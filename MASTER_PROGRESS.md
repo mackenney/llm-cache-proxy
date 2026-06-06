@@ -7,7 +7,6 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 ## In Progress
 
 _(none)_
-
 ## Queued
 
 ### System-prompt cache-key normalization
@@ -41,9 +40,12 @@ Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, 
 - SSE-aware restoring: `SseRestoreStream` replaces raw-byte restore; all 4 providers covered — 6d30152
 - Fix SSE detection for Anthropic real API: `is_sse_first_chunk` detects `event: ` prefix; E2E verified — 6e39cc0
 - Code review fixes: frame reconstruction bug, UTF-8 chunk corruption, empty-chunk latch, partial-state error, hex crate, SPEC update (159 tests) — a834725
+- SSE multi-buffer field coverage: FieldKey/ExtractedField architecture, VC-SSE-1..13 (all providers), 3-round code review, E2E verified vs real APIs — cdf8fc5
 
 ---
 
 ## Known Gaps
 
-_(none)_
+- **OpenAI Responses API `response.completed` event leaks fake** — the final `response.completed` event body contains the fake key because `extract_fields` does not extract from non-delta/done event types; `e2e_openai_responses_api` intentionally omits `assert_absent` for this reason. Low-priority: the secret is already restored in all `delta`/`done` events.
+- **Responses API `response.reasoning_summary_text.done` unhandled** — SPEC only mandates `.delta` for reasoning summary; if OpenAI emits a `.done` event with the full reasoning text containing a fake, it leaks. Low-priority: no MUST requirement covers this event type.
+- **Gemini `GeminiText` same-thought multi-event accumulation** — `GeminiText { thought: bool }` accumulates all same-thought text parts into one buffer; if two separate streaming events each deliver a non-thought text part, the second frame's `parts[N].text` is written as empty string after restoration. Current Gemini streaming never does this. Outside VC-SSE-9 scope.
