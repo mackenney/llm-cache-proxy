@@ -6,9 +6,7 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 ## In Progress
 
-### Body size limit
-
-Add `--body-limit` / `LCP_BODY_LIMIT` (default 100 MiB, 0 = no limit) via `DefaultBodyLimit` on proxy routes. Plan: `plans/body-size-limit/`
+_(none)_
 ## Queued
 
 ### System-prompt cache-key normalization
@@ -43,6 +41,7 @@ Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, 
 - Fix SSE detection for Anthropic real API: `is_sse_first_chunk` detects `event: ` prefix; E2E verified — 6e39cc0
 - Code review fixes: frame reconstruction bug, UTF-8 chunk corruption, empty-chunk latch, partial-state error, hex crate, SPEC update (159 tests) — a834725
 - SSE multi-buffer field coverage: FieldKey/ExtractedField architecture, VC-SSE-1..13 (all providers), 3-round code review, E2E verified vs real APIs — cdf8fc5
+- Body size limit: `--body-limit` / `LCP_BODY_LIMIT` (default 100 MiB, 0 = no limit), `DefaultBodyLimit` on proxy routes, 2 spec invariants + 3 integration tests — 47747de
 
 ---
 
