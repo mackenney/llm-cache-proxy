@@ -316,7 +316,8 @@ lcp reads a TOML config file on startup:
 | `--host` | `LCP_HOST` | `127.0.0.1` | Bind host |
 | `--db` | `LCP_DB` | `~/.cache/lcp/cache.db` | SQLite path |
 | `--ttl` | `LCP_TTL` | `0` | Entry TTL in seconds (0 = forever) |
-| `--timeout` | `LCP_TIMEOUT` | `300` | Upstream request timeout in seconds |
+| `--timeout` | `LCP_TIMEOUT` | `300` | Upstream request timeout in seconds (0 = no timeout) |
+| `--body-limit` | `LCP_BODY_LIMIT` | `104857600` | Max incoming request body in bytes (0 = no limit) |
 | `--anthropic-upstream` | `LCP_ANTHROPIC_UPSTREAM` | see table above | Anthropic upstream |
 | `--openai-upstream` | `LCP_OPENAI_UPSTREAM` | see table above | OpenAI upstream |
 | `--openrouter-upstream` | `LCP_OPENROUTER_UPSTREAM` | see table above | OpenRouter upstream |

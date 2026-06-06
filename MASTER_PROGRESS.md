@@ -6,7 +6,9 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 ## In Progress
 
-_(none)_
+### Body size limit
+
+Add `--body-limit` / `LCP_BODY_LIMIT` (default 100 MiB, 0 = no limit) via `DefaultBodyLimit` on proxy routes. Plan: `plans/body-size-limit/`
 ## Queued
 
 ### System-prompt cache-key normalization
