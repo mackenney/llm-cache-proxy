@@ -93,3 +93,17 @@ Every human and agent working on lcp reads it first to understand current state.
 - **Shell:** bash; `jq`, `rg`, `fdfind` available
 - **Build:** `cargo build`, `cargo test`, `cargo clippy`, `cargo fmt`
 - **Tests:** `cargo nextest run`
+
+## Publishing
+
+To publish a new release to crates.io:
+
+1. `cargo nextest run` — all tiers must pass
+2. `cargo clippy --workspace --all-targets -- -D warnings` — must be clean
+3. Run an E2E test against a real provider: `cargo nextest run --test e2e --features test-e2e`
+4. Bump the workspace version in the root `Cargo.toml`
+5. `cargo build` — verifies `Cargo.lock` is updated
+6. Commit: `chore: bump version to vX.Y.Z`
+7. Tag the commit: `git tag vX.Y.Z <commit-hash>`
+8. `cargo publish -p lcp-core && cargo publish -p lcp-server && cargo publish -p lcp`
+   (publish in dependency order; each may need a moment before the next is accepted)
