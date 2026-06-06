@@ -2180,7 +2180,6 @@ async fn restore_openai_refusal() {
     );
 }
 
-
 #[tokio::test]
 async fn restore_openai_tool_calls_multi_index() {
     // VC-SSE-4: tool_calls accumulation is keyed per-index; two concurrent tool calls
@@ -2264,5 +2263,9 @@ async fn restore_openai_tool_calls_multi_index() {
         &[GITHUB_CLASSIC],
         "tool_calls index 1: original must be restored",
     );
-    assert_absent(&resp_bytes, &[&fake1_bytes, &fake2_bytes], "both fakes must be absent");
+    assert_absent(
+        &resp_bytes,
+        &[&fake1_bytes, &fake2_bytes],
+        "both fakes must be absent",
+    );
 }
