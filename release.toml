@@ -1,0 +1,14 @@
+# cargo-release workspace configuration.
+# Run: cargo release minor --workspace --execute
+# Dry-run (default): cargo release minor --workspace
+
+allow-branch = ["main"]
+
+# All crates move together; one commit covers the whole workspace.
+shared-version = true
+consolidate-commits = true
+pre-release-commit-message = "chore: release v{{version}}"
+
+# Tags and CHANGELOG stamping are owned by the `lcp` crate (package.metadata.release).
+# Disabling them here prevents duplicate tags from lcp-core and lcp-server.
+tag = false

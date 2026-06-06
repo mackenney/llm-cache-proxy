@@ -69,6 +69,10 @@ Every human and agent working on lcp reads it first to understand current state.
 - Three external tiers: **spec invariants** (`tests/spec/`) on every commit; **integration** (`tests/integration/`); **E2E** (`tests/e2e/`) gated by `--features test-e2e`.
 - Never weaken an external test to make a refactor pass.
 - Write spec invariant tests alongside the spec, before the implementation.
+- **Bugs and gaps found during exploration or E2E testing MUST have a failing
+  external test that surfaces the problem before any fix is written.** The test
+  goes in the appropriate tier (`tests/spec/`, `tests/integration/`, or
+  `tests/e2e/`). A fix with no corresponding test is not acceptable.
 - Run: `cargo nextest run` (all); `cargo nextest run --test spec` (invariants only).
 
 ## Crates
@@ -96,14 +100,33 @@ Every human and agent working on lcp reads it first to understand current state.
 
 ## Publishing
 
-To publish a new release to crates.io:
+Releases use `cargo-release` (`cargo install cargo-release`).
+All three crates share a version and are published together.
+
+### Pre-release checklist (do this before running cargo-release)
 
 1. `cargo nextest run` — all tiers must pass
 2. `cargo clippy --workspace --all-targets -- -D warnings` — must be clean
-3. Run an E2E test against a real provider: `cargo nextest run --test e2e --features test-e2e`
-4. Bump the workspace version in the root `Cargo.toml`
-5. `cargo build` — verifies `Cargo.lock` is updated
-6. Commit: `chore: bump version to vX.Y.Z`
-7. Tag the commit: `git tag vX.Y.Z <commit-hash>`
-8. `cargo publish -p lcp-core && cargo publish -p lcp-server && cargo publish -p lcp`
-   (publish in dependency order; each may need a moment before the next is accepted)
+3. Run an E2E test: `cargo nextest run --test e2e --features test-e2e`
+4. Update `CHANGELOG.md` — fill in the `[Unreleased]` section with all notable
+   changes grouped under `Added`, `Changed`, `Fixed`, `Removed`, or `Security`.
+   Leave the `<!-- next-header -->` and `<!-- next-url -->` markers in place;
+   `cargo-release` stamps the version and date automatically.
+
+### Release
+
+```bash
+# Dry run (default) — verify what will happen:
+cargo release minor --workspace
+
+# Execute:
+cargo release minor --workspace --execute
+```
+
+Use `patch` / `minor` / `major` per SemVer. `cargo release` will:
+- Bump the version in all workspace `Cargo.toml` files
+- Stamp `CHANGELOG.md` (version, date, comparison URLs) and re-insert `[Unreleased]`
+- Create a single commit: `chore: release vX.Y.Z`
+- Create a git tag `vX.Y.Z`
+- Publish `lcp-core`, `lcp-server`, and `lcp` to crates.io in dependency order
+- Push the commit and tag to `origin`
