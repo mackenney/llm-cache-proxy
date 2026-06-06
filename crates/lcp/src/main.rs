@@ -361,6 +361,7 @@ async fn run(cli: Cli, file_config: Option<FileConfig>) -> Result<()> {
         addr,
         cache,
         timeout_seconds: cli.timeout,
+        body_limit_bytes: 0,
         anthropic_upstream: cli.anthropic_upstream,
         openai_upstream: cli.openai_upstream,
         openrouter_upstream: cli.openrouter_upstream,

@@ -148,6 +148,7 @@ impl TestHarnessBuilder {
             addr: "127.0.0.1:0".parse().unwrap(),
             cache: cache.clone(),
             timeout_seconds: self.timeout_seconds,
+            body_limit_bytes: 0,
             anthropic_upstream: Some(upstream.clone()),
             openai_upstream: Some(upstream.clone()),
             openrouter_upstream: Some(upstream.clone()),
