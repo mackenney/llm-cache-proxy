@@ -44,6 +44,9 @@ struct Cli {
     #[arg(long, env = "LCP_TIMEOUT", default_value = "300")]
     timeout: u64,
 
+    /// Maximum incoming request body in bytes. 0 means no limit.
+    #[arg(long, env = "LCP_BODY_LIMIT", default_value = "104857600")]
+    body_limit: u64,
     /// Override the Anthropic upstream URL (default: https://api.anthropic.com).
     #[arg(long, env = "LCP_ANTHROPIC_UPSTREAM")]
     anthropic_upstream: Option<String>,
@@ -74,6 +77,7 @@ struct FileConfig {
     db: Option<String>,
     ttl: Option<u64>,
     timeout: Option<u64>,
+    body_limit: Option<u64>,
     anthropic_upstream: Option<String>,
     openai_upstream: Option<String>,
     openrouter_upstream: Option<String>,
@@ -168,6 +172,7 @@ fn seed_env_from_config_file(path: &Path) -> Option<FileConfig> {
     seed!("LCP_DB", fc.db.as_deref());
     seed!("LCP_TTL", fc.ttl);
     seed!("LCP_TIMEOUT", fc.timeout);
+    seed!("LCP_BODY_LIMIT", fc.body_limit);
     seed!("LCP_ANTHROPIC_UPSTREAM", fc.anthropic_upstream.as_deref());
     seed!("LCP_OPENAI_UPSTREAM", fc.openai_upstream.as_deref());
     seed!("LCP_OPENROUTER_UPSTREAM", fc.openrouter_upstream.as_deref());
@@ -206,6 +211,7 @@ fn print_config(cli: &Cli, ext: Option<&ExtensionsConfig>) {
     println!("db = \"{}\"", db);
     println!("ttl = {}", cli.ttl);
     println!("timeout = {}", cli.timeout);
+    println!("body_limit = {}", cli.body_limit);
 
     match &cli.anthropic_upstream {
         Some(u) => println!("anthropic_upstream = \"{}\"", u),
@@ -361,6 +367,7 @@ async fn run(cli: Cli, file_config: Option<FileConfig>) -> Result<()> {
         addr,
         cache,
         timeout_seconds: cli.timeout,
+        body_limit_bytes: cli.body_limit,
         anthropic_upstream: cli.anthropic_upstream,
         openai_upstream: cli.openai_upstream,
         openrouter_upstream: cli.openrouter_upstream,

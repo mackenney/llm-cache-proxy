@@ -6,6 +6,7 @@
 mod common;
 
 mod admin;
+mod body_limit;
 mod bypass;
 mod cache_hit;
 mod cache_miss;

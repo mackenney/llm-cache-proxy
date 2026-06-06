@@ -18,6 +18,8 @@ pub struct ServerConfig {
     pub cache: Cache,
     /// Upstream request timeout in seconds. `0` means no timeout.
     pub timeout_seconds: u64,
+    /// Maximum incoming request body size in bytes. `0` means no limit.
+    pub body_limit_bytes: u64,
     /// Override the Anthropic upstream URL. Falls back to the provider default when `None`.
     pub anthropic_upstream: Option<String>,
     /// Override the OpenAI upstream URL. Falls back to the provider default when `None`.

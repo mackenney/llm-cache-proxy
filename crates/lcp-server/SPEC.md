@@ -33,6 +33,9 @@ store directly.
   provider's default upstream is used.
 - Upstream request timeout in seconds (default 300). Applied to the HTTP
   client used for forwarding; a value of 0 means no timeout.
+- Maximum incoming request body size in bytes (default 104_857_600 — 100 MiB).
+  A value of 0 means no limit. Requests exceeding the limit MUST be rejected
+  with HTTP 413 before reaching the proxy handler.
 
 `ServerConfig` MUST be `Clone + Send + Sync` so it can be shared across
 async request handlers.

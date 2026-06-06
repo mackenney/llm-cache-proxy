@@ -51,6 +51,16 @@ fn default_timeout_is_300() {
     assert!(stdout.contains("timeout = 300"), "stdout:\n{stdout}");
 }
 
+#[test]
+fn default_body_limit_is_100mb() {
+    let out = lcp().arg("--print-config").output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("body_limit = 104857600"),
+        "stdout:\n{stdout}"
+    );
+}
+
 // Upstream options without a value are commented out
 
 #[test]

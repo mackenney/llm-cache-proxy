@@ -5,6 +5,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod body_limit;
 mod doppel;
 mod timeout;
 mod ttl;
