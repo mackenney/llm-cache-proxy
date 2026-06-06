@@ -85,6 +85,7 @@ impl Drop for TestHarness {
 pub struct TestHarnessBuilder {
     mock: Option<MockUpstream>,
     timeout_seconds: u64,
+    body_limit_bytes: u64,
     ttl_seconds: u64,
     upstream_url: Option<String>,
     extensions: lcp_server::ExtensionPipeline,
@@ -95,6 +96,7 @@ impl TestHarnessBuilder {
         Self {
             mock: None,
             timeout_seconds: 30,
+            body_limit_bytes: 104_857_600,
             ttl_seconds: 0,
             upstream_url: None,
             extensions: lcp_server::ExtensionPipeline::new(),
@@ -109,6 +111,13 @@ impl TestHarnessBuilder {
     /// Set proxy timeout in seconds (default: 30).
     pub fn timeout(mut self, seconds: u64) -> Self {
         self.timeout_seconds = seconds;
+        self
+    }
+
+    /// Set proxy body limit in bytes (default: 104_857_600 = 100 MiB).
+    /// Use 0 for no limit.
+    pub fn body_limit(mut self, bytes: u64) -> Self {
+        self.body_limit_bytes = bytes;
         self
     }
 
@@ -148,7 +157,7 @@ impl TestHarnessBuilder {
             addr: "127.0.0.1:0".parse().unwrap(),
             cache: cache.clone(),
             timeout_seconds: self.timeout_seconds,
-            body_limit_bytes: 0,
+            body_limit_bytes: self.body_limit_bytes,
             anthropic_upstream: Some(upstream.clone()),
             openai_upstream: Some(upstream.clone()),
             openrouter_upstream: Some(upstream.clone()),
