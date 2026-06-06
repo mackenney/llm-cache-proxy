@@ -7,6 +7,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod body_limit;
 mod cli;
 
 mod sse_fields;
