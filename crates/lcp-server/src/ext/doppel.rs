@@ -86,7 +86,7 @@ impl DoppelExt {
     pub fn from_secrets_file(path: &std::path::Path) -> Result<Self, DoppelExtLoadError> {
         let bytes = std::fs::read(path)?;
         let pf = doppel::SecretsFile::deserialize(&bytes)?;
-        let patterns = pf.into_patterns()?;
+        let patterns = pf.to_patterns()?;
         Ok(Self::new(patterns))
     }
 

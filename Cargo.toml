@@ -10,9 +10,11 @@ resolver = "2"
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
+rust-version = "1.85"
 authors = ["Ignacio"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/mackenney/llm-cache-proxy"
+readme = "README.md"
 publish = false
 
 [profile.dev]
@@ -67,6 +69,3 @@ lcp-server = { path = "crates/lcp-server", version = "0.0.1" }
 doppel = { version = "0.0.1", features = ["async"] }
 hex = "0.4"
 
-[patch.crates-io]
-# Local override until doppel is published to crates.io. Remove this section after publishing.
-doppel = { path = "/home/ignacio/pr/doppel/doppel" }

@@ -3,6 +3,7 @@ name = "lcp"
 description = "Local HTTP proxy that caches LLM API calls and replays them at full speed"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true

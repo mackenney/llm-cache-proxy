@@ -12,8 +12,8 @@ use lcp_server::{DoppelExt, ExtensionPipeline, ServerConfig, serve};
 #[derive(Parser, Debug)]
 #[command(
     name = "lcp",
-    about = "Local HTTP proxy that caches LLM API calls. Point clients at http://127.0.0.1:9001/<provider>.",
-    long_about = "lcp is a local HTTP proxy that caches LLM API responses on disk and replays them on subsequent identical requests, eliminating redundant API spend during iterative development.\n\nPoint your LLM client at lcp instead of the real API:\n  ANTHROPIC_BASE_URL=http://127.0.0.1:9001/anthropic\n  OPENAI_BASE_URL=http://127.0.0.1:9001/openai\n  OPENROUTER_BASE_URL=http://127.0.0.1:9001/openrouter\n  GEMINI_BASE_URL=http://127.0.0.1:9001/gemini\n\nFirst call goes to the real API and is cached. Subsequent identical calls are served from disk at full speed. Send x-lcp-bypass: 1 to skip the cache for a request.\n\nTag any request with x-lcp-trace: <id> to group it into a named trace session. Retrieve the full exchange log later with GET /trace/<id>."
+    about = "Local HTTP proxy that caches LLM API calls (default: http://127.0.0.1:9001, see --host/--port).",
+    long_about = "lcp is a local HTTP proxy that caches LLM API responses on disk and replays them on subsequent identical requests, eliminating redundant API spend during iterative development.\n\nPoint your LLM client at lcp instead of the real API:\n  ANTHROPIC_BASE_URL=http://127.0.0.1:9001/anthropic\n  OPENAI_BASE_URL=http://127.0.0.1:9001/openai\n  OPENROUTER_BASE_URL=http://127.0.0.1:9001/openrouter\n  GEMINI_BASE_URL=http://127.0.0.1:9001/gemini\n\nReplace 127.0.0.1:9001 with whatever --host/--port you configure.\n\nFirst call goes to the real API and is cached. Subsequent identical calls are served from disk at full speed. Send x-lcp-bypass: 1 to skip the cache for a request.\n\nTag any request with x-lcp-trace: <id> to group it into a named trace session. Retrieve the full exchange log later with GET /trace/<id>.\n\nSecret protection (doppel extension):\n  lcp can strip secrets from requests before they are forwarded and cached.\n  Enable via --doppel-secrets-file or config:\n    [extensions.doppel]\n    secrets_file = \"~/.config/lcp/secrets.toml\"\n  Set up with: doppel init --patterns ~/.config/lcp/secrets.toml"
 )]
 struct Cli {
     /// Path to config file (TOML). Defaults to $XDG_CONFIG_HOME/lcp/config.toml.
@@ -44,21 +44,25 @@ struct Cli {
     #[arg(long, env = "LCP_TIMEOUT", default_value = "300")]
     timeout: u64,
 
-    /// Override the Anthropic upstream URL.
+    /// Override the Anthropic upstream URL (default: https://api.anthropic.com).
     #[arg(long, env = "LCP_ANTHROPIC_UPSTREAM")]
     anthropic_upstream: Option<String>,
 
-    /// Override the OpenAI upstream URL.
+    /// Override the OpenAI upstream URL (default: https://api.openai.com).
     #[arg(long, env = "LCP_OPENAI_UPSTREAM")]
     openai_upstream: Option<String>,
 
-    /// Override the OpenRouter upstream URL.
+    /// Override the OpenRouter upstream URL (default: https://openrouter.ai/api/v1).
     #[arg(long, env = "LCP_OPENROUTER_UPSTREAM")]
     openrouter_upstream: Option<String>,
 
-    /// Override the Gemini upstream URL.
+    /// Override the Gemini upstream URL (default: https://generativelanguage.googleapis.com).
     #[arg(long, env = "LCP_GEMINI_UPSTREAM")]
     gemini_upstream: Option<String>,
+
+    /// Path to the doppel secrets file. Enables secret scrubbing/restoration. Overrides config file.
+    #[arg(long, env = "LCP_DOPPEL_SECRETS_FILE")]
+    doppel_secrets_file: Option<PathBuf>,
 }
 
 /// Subset of config that can be set via the TOML config file.
@@ -221,10 +225,15 @@ fn print_config(cli: &Cli, ext: Option<&ExtensionsConfig>) {
     }
 
     println!();
-    match ext
-        .and_then(|e| e.doppel.as_ref())
-        .and_then(|s| s.secrets_file.as_deref())
-    {
+    let doppel_path = cli
+        .doppel_secrets_file
+        .as_deref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .or_else(|| {
+            ext.and_then(|e| e.doppel.as_ref())
+                .and_then(|d| d.secrets_file.clone())
+        });
+    match doppel_path.as_deref() {
         Some(p) => {
             println!("[extensions.doppel]");
             println!("secrets_file = \"{}\"", p);
@@ -328,8 +337,23 @@ async fn run(cli: Cli, file_config: Option<FileConfig>) -> Result<()> {
     let cache = Cache::open(&db_path, cli.ttl)?;
     tracing::info!(path = %db_path.display(), "cache database opened");
 
-    let extensions =
-        build_extension_pipeline(file_config.as_ref().and_then(|fc| fc.extensions.as_ref()));
+    let doppel_secrets = cli
+        .doppel_secrets_file
+        .as_deref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .or_else(|| {
+            file_config
+                .as_ref()
+                .and_then(|fc| fc.extensions.as_ref())
+                .and_then(|e| e.doppel.as_ref())
+                .and_then(|d| d.secrets_file.clone())
+        });
+    let merged_ext = doppel_secrets.map(|s| ExtensionsConfig {
+        doppel: Some(DoppelConfig {
+            secrets_file: Some(s),
+        }),
+    });
+    let extensions = build_extension_pipeline(merged_ext.as_ref());
 
     let addr: SocketAddr = format!("{}:{}", cli.host, cli.port).parse()?;
 
