@@ -1,7 +1,7 @@
 # PROGRESS.md
 
 ## Status
-In Progress
+Complete
 
 ## Objective
 Extend the SSE restore pipeline to handle all provider-specific content fields (VC-SSE-1..13), replacing the single-field/single-buffer architecture with a keyed multi-buffer model that accumulates and restores each content field independently.
@@ -47,13 +47,13 @@ Note: Waves 1–4 can execute in parallel after Wave 0 completes. Wave 5 and Wav
 - Reviewers: Run acceptance criteria verbatim. Pass or fail with specifics.
 
 ## Steps
-- [ ] [step-01-refactor-api](./step-01-refactor-api.md) — Wave 0: Replace single-field extraction with `FieldKey`/`ExtractedField` multi-buffer architecture; all existing tests must pass
-- [ ] [step-02-anthropic-fields](./step-02-anthropic-fields.md) — Wave 1: Add `thinking_delta` (VC-SSE-1), `input_json_delta` (VC-SSE-2), `signature_delta` passthrough (VC-SSE-3) with unit + integration tests
-- [ ] [step-03-openai-fields](./step-03-openai-fields.md) — Wave 2: Add `tool_calls[N].function.arguments` (VC-SSE-4), `reasoning_content` (VC-SSE-5), `function_call.arguments` (VC-SSE-6) with unit + integration tests
-- [ ] [step-04-responses-api](./step-04-responses-api.md) — Wave 3: Add OpenAI Responses API support (VC-SSE-7, VC-SSE-8) with unit + integration tests
-- [ ] [step-05-gemini-fields](./step-05-gemini-fields.md) — Wave 4: Add multi-part text (VC-SSE-9), `codeExecutionResult.output` (VC-SSE-10), `functionCall.args` (VC-SSE-11), metadata passthrough (VC-SSE-12) with unit + integration tests
-- [ ] [step-06-e2e-tests](./step-06-e2e-tests.md) — Wave 5: E2E tests per provider, gated by env vars
-- [ ] [step-07-cross-field-regression](./step-07-cross-field-regression.md) — Wave 6: Cross-field isolation (VC-SSE-13) integration tests + full regression sweep
+- [x] [step-01-refactor-api](./step-01-refactor-api.md) — Wave 0: Replace single-field extraction with `FieldKey`/`ExtractedField` multi-buffer architecture; all existing tests must pass (commit 775e9d1)
+- [x] [step-02-anthropic-fields](./step-02-anthropic-fields.md) — Wave 1: Add `thinking_delta` (VC-SSE-1), `input_json_delta` (VC-SSE-2), `signature_delta` passthrough (VC-SSE-3) with unit + integration tests (commit 7078636)
+- [x] [step-03-openai-fields](./step-03-openai-fields.md) — Wave 2: Add `tool_calls[N].function.arguments` (VC-SSE-4), `reasoning_content` (VC-SSE-5), `function_call.arguments` (VC-SSE-6) with unit + integration tests (commit 9e95387)
+- [x] [step-04-responses-api](./step-04-responses-api.md) — Wave 3: Add OpenAI Responses API support (VC-SSE-7, VC-SSE-8) with unit + integration tests (commit 16b1955)
+- [x] [step-05-gemini-fields](./step-05-gemini-fields.md) — Wave 4: Add multi-part text (VC-SSE-9), `codeExecutionResult.output` (VC-SSE-10), `functionCall.args` (VC-SSE-11), metadata passthrough (VC-SSE-12) with unit + integration tests (commit cfb9e78)
+- [x] [step-06-e2e-tests](./step-06-e2e-tests.md) — Wave 5: E2E tests per provider, gated by env vars (commit 13a52ef)
+- [x] [step-07-cross-field-regression](./step-07-cross-field-regression.md) — Wave 6: Cross-field isolation (VC-SSE-13) integration tests + full regression sweep (commit c6b6c90)
 
 ## Owner Attention Required
 
