@@ -39,6 +39,11 @@ async fn test_body_exceeding_limit_returns_413() {
         413,
         "body exceeding limit must return 413 Payload Too Large"
     );
+    // Spec: rejection MUST happen before reaching the proxy handler.
+    assert!(
+        harness.mock_requests().is_empty(),
+        "upstream must receive zero requests when body is rejected by size limit"
+    );
 }
 
 /// Request body within the limit MUST pass through to upstream.
@@ -78,5 +83,44 @@ async fn test_body_within_limit_passes_through() {
         200,
         "body within limit must pass through; got {}",
         resp.status()
+    );
+}
+
+/// body_limit = 0 MUST mean no limit — large bodies MUST pass through.
+#[tokio::test]
+async fn test_body_limit_zero_means_no_limit() {
+    let mock = MockUpstream::builder()
+        .json(200, r#"{"id":"ok"}"#)
+        .build()
+        .await;
+
+    // 0 = no limit; proxy must not reject even a 1 MiB body.
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .body_limit(0)
+        .build()
+        .await;
+
+    let client = reqwest::Client::new();
+    let large_body = "x".repeat(1_048_576); // 1 MiB
+
+    let resp = client
+        .post(format!("{}/anthropic/v1/messages", harness.proxy_url()))
+        .header("x-api-key", "test-key")
+        .header("content-type", "application/json")
+        .body(large_body)
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_ne!(
+        resp.status().as_u16(),
+        413,
+        "body_limit = 0 must mean no limit; got 413"
+    );
+    assert_eq!(
+        harness.mock_requests().len(),
+        1,
+        "request must reach upstream when limit is 0"
     );
 }
