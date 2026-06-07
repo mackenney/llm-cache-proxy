@@ -29,10 +29,10 @@
 //! appears in logs (`SensitiveState::Debug` is redacted).
 
 use std::io;
+use std::sync::Arc;
 
 use bytes::Bytes;
-use doppel::swap;
-use doppel::{Entry, Pattern, SessionKey};
+use doppel::{Detector, Entry, Pattern, SessionKey};
 use futures_util::future::BoxFuture;
 
 use crate::extensions::{
@@ -75,7 +75,7 @@ pub enum DoppelExtLoadError {
 /// );
 /// ```
 pub struct DoppelExt {
-    patterns: Vec<Pattern>,
+    detector: Arc<Detector>,
 }
 
 impl DoppelExt {
@@ -92,7 +92,9 @@ impl DoppelExt {
 
     /// Create a `DoppelExt` from an explicit list of patterns.
     pub fn new(patterns: Vec<Pattern>) -> Self {
-        Self { patterns }
+        Self {
+            detector: Arc::new(Detector::new(patterns)),
+        }
     }
 }
 
@@ -108,9 +110,9 @@ impl Extension for DoppelExt {
         _ctx: ProxyCtx,
         body: Bytes,
     ) -> BoxFuture<'static, Result<(Bytes, SensitiveStateBuilder), anyhow::Error>> {
-        let patterns = self.patterns.clone();
+        let detector = Arc::clone(&self.detector);
         Box::pin(async move {
-            let result = swap(&body, &patterns)?;
+            let result = detector.swap(&body)?;
 
             if result.entries.is_empty() {
                 // No secrets detected — pass body through unchanged with empty state.
