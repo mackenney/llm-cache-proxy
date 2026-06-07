@@ -2269,3 +2269,216 @@ async fn restore_openai_tool_calls_multi_index() {
         "both fakes must be absent",
     );
 }
+
+#[tokio::test]
+async fn sliding_window_single_frame_stream() {
+    // Sliding-window edge case: entire fake in one frame whose length equals
+    // max_fake_len. The safe prefix never fires before EOF; all content is
+    // emitted by the EOF accumulator flush.
+    use doppel::swap as doppel_swap;
+
+    let pat = patterns::anthropic();
+    let body_bytes = [b"key: ".as_slice(), ANT].concat();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    // Single content_block_delta carries the full fake.
+    let sse_chunks = vec![
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sw1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null}}\n\n".to_owned(),
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n".to_owned(),
+        format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{fake}\"}}}}\n\n",
+            fake = fake_str
+        ),
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n".to_owned(),
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_owned(),
+    ];
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"claude-haiku-4-5","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"key={}"}}]}}"#,
+        String::from_utf8_lossy(ANT)
+    );
+
+    let resp = client
+        .post(format!("{}/anthropic/v1/messages", harness.proxy_url()))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[ANT],
+        "single-frame: EOF flush must restore original from window-sized accumulator",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "single-frame: fake must not reach client",
+    );
+}
+
+#[tokio::test]
+async fn sliding_window_fake_at_window_boundary() {
+    // Sliding-window edge case: a leading non-fake byte followed by the fake
+    // fills the accumulator to exactly max_fake_len+1. The safe prefix fires
+    // and releases the leading byte; the fake (F bytes) remains in the hold
+    // window and is fully restored at the EOF flush.
+    use doppel::swap as doppel_swap;
+
+    let pat = patterns::anthropic();
+    let body_bytes = [b"key: ".as_slice(), ANT].concat();
+    let sr = doppel_swap(&body_bytes, std::slice::from_ref(&pat)).unwrap();
+    let fake_bytes = sr.entries[0].fake.clone();
+    let fake_str = String::from_utf8_lossy(&fake_bytes).into_owned();
+
+    // Frame 1: a single non-fake byte (just a period) — won't fill the window.
+    // Frame 2: the full fake — accumulator becomes 1 + F = F+1 bytes, which
+    // causes safe_prefix to flush the leading ".", leaving the fake intact.
+    let sse_chunks = vec![
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sw2\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null}}\n\n".to_owned(),
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n".to_owned(),
+        // Leading non-fake byte: does not fill the window, no flush yet.
+        "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\".\"}}\n\n".to_owned(),
+        // Full fake: accumulator = "." + fake (F+1 bytes) → safe_prefix flushes
+        // the leading "."; fake stays in hold window.
+        format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{fake}\"}}}}\n\n",
+            fake = fake_str
+        ),
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n".to_owned(),
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_owned(),
+    ];
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"claude-haiku-4-5","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"key={}"}}]}}"#,
+        String::from_utf8_lossy(ANT)
+    );
+
+    let resp = client
+        .post(format!("{}/anthropic/v1/messages", harness.proxy_url()))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[ANT],
+        "boundary: EOF flush must restore the fake that spans the entire hold window",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake_bytes],
+        "boundary: fake must not appear in client output",
+    );
+}
+
+#[tokio::test]
+async fn sliding_window_multi_field_independence() {
+    // Sliding-window edge case: two FieldKeys accumulate independently.
+    // thinking_delta (index 0) carries fake1, text_delta (index 1) carries
+    // fake2.  Each field's buffer must not bleed into the other; both must be
+    // fully restored at EOF flush.
+    use doppel::swap as doppel_swap;
+
+    let pat1 = patterns::anthropic();
+    let body1 = [b"key: ".as_slice(), ANT].concat();
+    let sr1 = doppel_swap(&body1, std::slice::from_ref(&pat1)).unwrap();
+    let fake1 = sr1.entries[0].fake.clone();
+    let fake1_str = String::from_utf8_lossy(&fake1).into_owned();
+
+    let pat2 = patterns::github_classic();
+    let body2 = [b"token: ".as_slice(), GITHUB_CLASSIC].concat();
+    let sr2 = doppel_swap(&body2, std::slice::from_ref(&pat2)).unwrap();
+    let fake2 = sr2.entries[0].fake.clone();
+    let fake2_str = String::from_utf8_lossy(&fake2).into_owned();
+
+    // Both fakes fit in their respective window (each field's max_fake_len is
+    // the longer of the two fakes). Send each whole in a single frame so the
+    // safe prefix never fires; verify EOF flush restores both independently.
+    let sse_chunks = vec![
+        "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sw3\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null}}\n\n".to_owned(),
+        // Field 0: thinking_delta (index 0) — fake1
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n".to_owned(),
+        format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"thinking_delta\",\"thinking\":\"{f1}\"}}}}\n\n",
+            f1 = fake1_str
+        ),
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n".to_owned(),
+        // Field 1: text_delta (index 1) — fake2
+        "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n".to_owned(),
+        format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":1,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{f2}\"}}}}\n\n",
+            f2 = fake2_str
+        ),
+        "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n".to_owned(),
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_owned(),
+    ];
+
+    let mock = MockUpstream::builder().sse(200, sse_chunks).build().await;
+    let harness = TestHarness::builder()
+        .mock(mock)
+        .extensions(ExtensionPipeline::new().register(DoppelExt::new(vec![pat1, pat2])))
+        .build()
+        .await;
+    let client = reqwest::Client::new();
+
+    let body = format!(
+        r#"{{"model":"claude-haiku-4-5","max_tokens":200,"stream":true,"messages":[{{"role":"user","content":"k={k} t={t}"}}]}}"#,
+        k = String::from_utf8_lossy(ANT),
+        t = String::from_utf8_lossy(GITHUB_CLASSIC)
+    );
+
+    let resp = client
+        .post(format!("{}/anthropic/v1/messages", harness.proxy_url()))
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let resp_bytes = resp.bytes().await.unwrap();
+    harness.wait_for_writes().await;
+
+    assert_present(
+        &resp_bytes,
+        &[ANT],
+        "multi-field: thinking field (field 0) must be restored",
+    );
+    assert_present(
+        &resp_bytes,
+        &[GITHUB_CLASSIC],
+        "multi-field: text field (field 1) must be restored",
+    );
+    assert_absent(
+        &resp_bytes,
+        &[&fake1, &fake2],
+        "multi-field: neither fake must appear in output",
+    );
+}

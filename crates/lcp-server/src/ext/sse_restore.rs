@@ -22,8 +22,6 @@ use crate::extensions::ResponseStream;
 
 /// Identifies a logically independent content stream within an SSE response.
 /// Fields with the same key accumulate into the same buffer.
-// Variants not yet extracted are defined here for future steps; suppress dead_code
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum FieldKey {
     // Anthropic — keyed by (delta_type, content_block_index)
@@ -47,17 +45,10 @@ enum FieldKey {
 struct ExtractedField {
     key: FieldKey,
     text: String,
-    /// Write-back location: the information needed to set the restored text
-    /// back into the correct JSON path. This is separate from `key` because
-    /// the accumulation identity may differ from the write-back path (e.g.,
-    /// Gemini parts keyed by `thought` but written back by `part_index`).
-    #[allow(dead_code)]
-    write_back: WriteBackInfo,
 }
 
 /// Information needed to write a restored value back into its JSON location.
-// Variants not yet used are defined here for future steps; suppress dead_code
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug, Clone)]
 enum WriteBackInfo {
     /// Anthropic: `json["delta"][field_name]` where field_name is "text", "thinking", or "partial_json"
@@ -69,8 +60,6 @@ enum WriteBackInfo {
     OpenAiToolCall { array_pos: usize },
     /// OpenAI: `json["choices"][0]["delta"]["reasoning_content"]`
     OpenAiReasoning,
-    /// OpenAI: `json["choices"][0]["delta"]["function_call"]["arguments"]`
-    OpenAiFunctionCallArgs,
     /// OpenAI: `json["choices"][0]["delta"]["refusal"]`
     OpenAiRefusal,
     /// Responses API: `json["delta"]`
@@ -83,14 +72,6 @@ enum WriteBackInfo {
     GeminiPartCodeExecOutput { part_index: usize },
     /// Gemini: `json["candidates"][0]["content"]["parts"][part_index]["functionCall"]["args"][arg_key]`
     GeminiPartFuncCallArg { part_index: usize, arg_key: String },
-}
-
-/// Records what a single frame contributed to each accumulation buffer.
-#[allow(dead_code)]
-struct FrameFieldContribution {
-    key: FieldKey,
-    byte_len: usize,
-    write_back: WriteBackInfo,
 }
 
 /// Returns `true` if the first bytes of a response chunk look like an SSE stream.
@@ -135,9 +116,6 @@ fn extract_fields(
                                 index,
                             },
                             text: text.to_owned(),
-                            write_back: WriteBackInfo::AnthropicDelta {
-                                field_name: "text".into(),
-                            },
                         }]
                     } else {
                         vec![]
@@ -151,9 +129,6 @@ fn extract_fields(
                                 index,
                             },
                             text: text.to_owned(),
-                            write_back: WriteBackInfo::AnthropicDelta {
-                                field_name: "thinking".into(),
-                            },
                         }]
                     } else {
                         vec![]
@@ -167,9 +142,6 @@ fn extract_fields(
                                 index,
                             },
                             text: text.to_owned(),
-                            write_back: WriteBackInfo::AnthropicDelta {
-                                field_name: "partial_json".into(),
-                            },
                         }]
                     } else {
                         vec![]
@@ -193,7 +165,6 @@ fn extract_fields(
                                         event_type: "output_text".into(),
                                     },
                                     text: text.to_owned(),
-                                    write_back: WriteBackInfo::ResponsesApiDelta,
                                 }]
                             } else {
                                 vec![]
@@ -206,7 +177,6 @@ fn extract_fields(
                                         event_type: "output_text".into(),
                                     },
                                     text: text.to_owned(),
-                                    write_back: WriteBackInfo::ResponsesApiDone,
                                 }]
                             } else {
                                 vec![]
@@ -219,7 +189,6 @@ fn extract_fields(
                                         event_type: "reasoning_summary_text".into(),
                                     },
                                     text: text.to_owned(),
-                                    write_back: WriteBackInfo::ResponsesApiDelta,
                                 }]
                             } else {
                                 vec![]
@@ -241,7 +210,6 @@ fn extract_fields(
                 fields.push(ExtractedField {
                     key: FieldKey::OpenAiContent,
                     text: text.to_owned(),
-                    write_back: WriteBackInfo::OpenAiContent,
                 });
             }
 
@@ -249,12 +217,11 @@ fn extract_fields(
                 fields.push(ExtractedField {
                     key: FieldKey::OpenAiReasoning,
                     text: text.to_owned(),
-                    write_back: WriteBackInfo::OpenAiReasoning,
                 });
             }
 
             if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-                for (array_pos, tc) in tool_calls.iter().enumerate() {
+                for tc in tool_calls.iter() {
                     let tc_index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
                     if let Some(args) = tc
                         .get("function")
@@ -265,7 +232,6 @@ fn extract_fields(
                             fields.push(ExtractedField {
                                 key: FieldKey::OpenAiToolCall { index: tc_index },
                                 text: args.to_owned(),
-                                write_back: WriteBackInfo::OpenAiToolCall { array_pos },
                             });
                         }
                     }
@@ -281,7 +247,6 @@ fn extract_fields(
                     fields.push(ExtractedField {
                         key: FieldKey::OpenAiFunctionCallArgs,
                         text: args.to_owned(),
-                        write_back: WriteBackInfo::OpenAiFunctionCallArgs,
                     });
                 }
             }
@@ -290,7 +255,6 @@ fn extract_fields(
                 fields.push(ExtractedField {
                     key: FieldKey::OpenAiRefusal,
                     text: text.to_owned(),
-                    write_back: WriteBackInfo::OpenAiRefusal,
                 });
             }
 
@@ -316,7 +280,6 @@ fn extract_fields(
                     fields.push(ExtractedField {
                         key: FieldKey::GeminiText { thought },
                         text: text.to_owned(),
-                        write_back: WriteBackInfo::GeminiPartText { part_index: i },
                     });
                 }
 
@@ -327,7 +290,6 @@ fn extract_fields(
                     fields.push(ExtractedField {
                         key: FieldKey::GeminiCodeExecOutput { part_index: i },
                         text: output.to_owned(),
-                        write_back: WriteBackInfo::GeminiPartCodeExecOutput { part_index: i },
                     });
                 }
 
@@ -343,10 +305,6 @@ fn extract_fields(
                                     arg_key: arg_key.clone(),
                                 },
                                 text: s.to_owned(),
-                                write_back: WriteBackInfo::GeminiPartFuncCallArg {
-                                    part_index: i,
-                                    arg_key: arg_key.clone(),
-                                },
                             });
                         }
                         // Non-string values (numbers, booleans, objects) are skipped.
@@ -430,21 +388,6 @@ fn apply_restored_fields(
                                 .to_owned(),
                         );
                     }
-                }
-            }
-            WriteBackInfo::OpenAiFunctionCallArgs => {
-                let target = json
-                    .get_mut("choices")
-                    .and_then(|c| c.get_mut(0))
-                    .and_then(|c| c.get_mut("delta"))
-                    .and_then(|d| d.get_mut("function_call"))
-                    .and_then(|fc| fc.get_mut("arguments"));
-                match target {
-                    Some(v) => *v = Value::String(text.clone()),
-                    None => return Err(
-                        "apply_restored_fields: choices[0].delta.function_call.arguments not found"
-                            .to_owned(),
-                    ),
                 }
             }
             WriteBackInfo::OpenAiRefusal => {
