@@ -13,6 +13,10 @@ _(none)_
 
 Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, `Current working directory: …`) from the cache key so the same logical prompt gets the same key across days and directories. The forwarded request is never modified — only the bytes fed into BLAKE3 are affected. Configured via `[extensions.system_prompt_normalize]` as a list of regexes matched against the system message body.
 
+### Sliding-window SSE restore — [plans/streaming-restore/](plans/streaming-restore/)
+
+Replace `SseRestoreStream` full-buffering state machine with per-FieldKey sliding window that emits restored SSE frames incrementally. Satisfies SPEC.md §SSE-Aware Restore: Sliding Window.
+
 ## Completed
 
 ### Foundation

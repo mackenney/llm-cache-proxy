@@ -4,7 +4,7 @@
 //! restoration in `text/event-stream` responses, where raw-byte Aho-Corasick
 //! fails because the fake key never appears contiguously in the byte stream.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -24,7 +24,7 @@ use crate::extensions::ResponseStream;
 /// Fields with the same key accumulate into the same buffer.
 // Variants not yet extracted are defined here for future steps; suppress dead_code
 #[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum FieldKey {
     // Anthropic — keyed by (delta_type, content_block_index)
     AnthropicDelta { delta_type: String, index: u64 },
@@ -51,6 +51,7 @@ struct ExtractedField {
     /// back into the correct JSON path. This is separate from `key` because
     /// the accumulation identity may differ from the write-back path (e.g.,
     /// Gemini parts keyed by `thought` but written back by `part_index`).
+    #[allow(dead_code)]
     write_back: WriteBackInfo,
 }
 
@@ -85,6 +86,7 @@ enum WriteBackInfo {
 }
 
 /// Records what a single frame contributed to each accumulation buffer.
+#[allow(dead_code)]
 struct FrameFieldContribution {
     key: FieldKey,
     byte_len: usize,
@@ -361,6 +363,7 @@ fn extract_fields(
 ///
 /// Returns `Err` if the target path doesn't exist in the JSON (signals
 /// extract/apply mismatch).
+#[cfg(test)]
 fn apply_restored_fields(
     json: &mut Value,
     restorations: &[(WriteBackInfo, String)],
@@ -535,34 +538,56 @@ fn apply_restored_fields(
     Ok(())
 }
 
-/// Response stream wrapper that auto-detects SSE and applies the correct
-/// restore strategy.
+/// Response stream wrapper that applies the correct restore strategy.
 ///
-/// For SSE (`text/event-stream`): buffers all frames, accumulates provider text
-/// fields, runs `restore_stream` on the concatenated text, redistributes the
-/// restored text back into the original SSE frames, then drains the queue.
+/// For SSE (`text/event-stream`): applies a per-FieldKey sliding-window
+/// algorithm (SPEC.md §SSE-Aware Restore: Sliding Window). Holds at most
+/// `max_fake_len` bytes per field before emitting restored synthetic frames,
+/// so output flows in real time rather than waiting for EOF.
 ///
 /// For non-SSE: buffers all bytes, runs `restore_stream` on the full buffer,
-/// then drains.
-///
-/// Trade-off: complete buffering is required because a fake may span any number
-/// of SSE events and its boundaries are unknown until the stream ends.
+/// then drains. (Raw-byte restore handles non-SSE correctly because the fake
+/// appears contiguously in the byte stream.)
 pub struct SseRestoreStream {
     state: SseState,
 }
 
 enum SseState {
-    /// Collecting all raw bytes from the inner stream.
-    Collecting {
+    /// Peek at the first non-empty chunk to decide SSE vs non-SSE.
+    Detecting {
         inner: ResponseStream,
-        raw_buf: Vec<u8>,
-        is_sse: Option<bool>,
         entries: Vec<Entry>,
         session_key: SessionKey,
         provider: Provider,
+        max_fake_len: usize,
     },
-    /// Processing the fully-collected buffer (async).
+    /// Non-SSE: collect all bytes then run restore_stream.
+    CollectingNonSse {
+        inner: ResponseStream,
+        raw_buf: Vec<u8>,
+        entries: Vec<Entry>,
+        session_key: SessionKey,
+    },
+    /// Processing the fully-collected non-SSE buffer (async).
     Processing(BoxFuture<'static, Result<VecDeque<Bytes>, io::Error>>),
+    /// SSE sliding-window: emit restored synthetic frames as text accumulates.
+    StreamingSse {
+        inner: ResponseStream,
+        entries: Vec<Entry>,
+        session_key: SessionKey,
+        provider: Provider,
+        /// Hold window: max(fake.len()) across all entries.
+        max_fake_len: usize,
+        /// Per-FieldKey accumulation buffers (BTreeMap for deterministic flush order).
+        accumulators: BTreeMap<FieldKey, String>,
+        /// Incomplete frame bytes — no complete `\n\n` yet.
+        raw_fragment: Vec<u8>,
+        /// Frames ready to emit downstream.
+        output_queue: VecDeque<Bytes>,
+        /// Non-text Gemini content (thoughtSignature, groundingMetadata, non-string
+        /// functionCall args) queued from mixed frames; emitted after the text flush.
+        deferred_passthrough: VecDeque<Bytes>,
+    },
     /// Draining the processed output queue.
     Emitting(VecDeque<Bytes>),
     /// Terminal: stream exhausted.
@@ -570,22 +595,22 @@ enum SseState {
 }
 
 impl SseRestoreStream {
-    /// Wrap `stream` in SSE-aware restoring. `provider` is used to locate the
-    /// text field in SSE events.
+    /// Wrap `stream` in SSE-aware restoring. `provider` identifies the
+    /// provider-specific SSE frame schema.
     pub fn new(
         stream: ResponseStream,
         entries: Vec<Entry>,
         session_key: SessionKey,
         provider: Provider,
     ) -> Self {
+        let max_fake_len = entries.iter().map(|e| e.fake.len()).max().unwrap_or(0);
         Self {
-            state: SseState::Collecting {
+            state: SseState::Detecting {
                 inner: stream,
-                raw_buf: Vec::new(),
-                is_sse: None,
                 entries,
                 session_key,
                 provider,
+                max_fake_len,
             },
         }
     }
@@ -597,76 +622,239 @@ impl Stream for SseRestoreStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             match std::mem::replace(&mut self.state, SseState::Done) {
-                SseState::Collecting {
+                SseState::Detecting {
                     mut inner,
-                    mut raw_buf,
-                    mut is_sse,
                     entries,
                     session_key,
                     provider,
-                } => {
-                    match inner.as_mut().poll_next(cx) {
-                        Poll::Ready(Some(Ok(chunk))) => {
-                            if is_sse.is_none() && !chunk.is_empty() {
-                                is_sse = Some(is_sse_first_chunk(&chunk));
-                            }
-                            raw_buf.extend_from_slice(&chunk);
-                            // Restore state and loop — drain inner before processing.
-                            self.state = SseState::Collecting {
-                                inner,
-                                raw_buf,
-                                is_sse,
-                                entries,
-                                session_key,
-                                provider,
-                            };
-                            continue;
-                        }
-                        Poll::Ready(Some(Err(e))) => {
-                            // state is already Done
-                            return Poll::Ready(Some(Err(e)));
-                        }
-                        Poll::Ready(None) => {
-                            let is_sse_flag = is_sse.unwrap_or(false);
-                            let fut = process_buffer(
-                                raw_buf,
-                                entries,
-                                session_key,
-                                provider,
-                                is_sse_flag,
-                            )
-                            .boxed();
-                            self.state = SseState::Processing(fut);
-                            continue;
-                        }
-                        Poll::Pending => {
-                            // Restore state — more data coming.
-                            self.state = SseState::Collecting {
-                                inner,
-                                raw_buf,
-                                is_sse,
-                                entries,
-                                session_key,
-                                provider,
-                            };
-                            return Poll::Pending;
-                        }
+                    max_fake_len,
+                } => match inner.as_mut().poll_next(cx) {
+                    Poll::Ready(Some(Ok(chunk))) if chunk.is_empty() => {
+                        // Empty leading chunk: wait for a non-empty one before latching is_sse.
+                        self.state = SseState::Detecting {
+                            inner,
+                            entries,
+                            session_key,
+                            provider,
+                            max_fake_len,
+                        };
+                        continue;
                     }
-                }
+                    Poll::Ready(Some(Ok(chunk))) => {
+                        if is_sse_first_chunk(&chunk) {
+                            let mut raw_fragment = Vec::new();
+                            raw_fragment.extend_from_slice(&chunk);
+                            self.state = SseState::StreamingSse {
+                                inner,
+                                entries,
+                                session_key,
+                                provider,
+                                max_fake_len,
+                                accumulators: BTreeMap::new(),
+                                raw_fragment,
+                                output_queue: VecDeque::new(),
+                                deferred_passthrough: VecDeque::new(),
+                            };
+                        } else {
+                            let mut raw_buf = Vec::new();
+                            raw_buf.extend_from_slice(&chunk);
+                            self.state = SseState::CollectingNonSse {
+                                inner,
+                                raw_buf,
+                                entries,
+                                session_key,
+                            };
+                        }
+                        continue;
+                    }
+                    Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                    Poll::Ready(None) => return Poll::Ready(None),
+                    Poll::Pending => {
+                        self.state = SseState::Detecting {
+                            inner,
+                            entries,
+                            session_key,
+                            provider,
+                            max_fake_len,
+                        };
+                        return Poll::Pending;
+                    }
+                },
+
+                SseState::CollectingNonSse {
+                    mut inner,
+                    mut raw_buf,
+                    entries,
+                    session_key,
+                } => match inner.as_mut().poll_next(cx) {
+                    Poll::Ready(Some(Ok(chunk))) => {
+                        raw_buf.extend_from_slice(&chunk);
+                        self.state = SseState::CollectingNonSse {
+                            inner,
+                            raw_buf,
+                            entries,
+                            session_key,
+                        };
+                        continue;
+                    }
+                    Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                    Poll::Ready(None) => {
+                        let fut = restore_non_sse(raw_buf, entries, session_key).boxed();
+                        self.state = SseState::Processing(fut);
+                        continue;
+                    }
+                    Poll::Pending => {
+                        self.state = SseState::CollectingNonSse {
+                            inner,
+                            raw_buf,
+                            entries,
+                            session_key,
+                        };
+                        return Poll::Pending;
+                    }
+                },
+
                 SseState::Processing(mut fut) => match fut.as_mut().poll(cx) {
                     Poll::Ready(Ok(queue)) => {
                         self.state = SseState::Emitting(queue);
                         continue;
                     }
-                    Poll::Ready(Err(e)) => {
-                        // state is already Done
-                        return Poll::Ready(Some(Err(e)));
-                    }
+                    Poll::Ready(Err(e)) => return Poll::Ready(Some(Err(e))),
                     Poll::Pending => {
                         self.state = SseState::Processing(fut);
                         return Poll::Pending;
                     }
                 },
+
+                SseState::StreamingSse {
+                    mut inner,
+                    entries,
+                    session_key,
+                    provider,
+                    max_fake_len,
+                    mut accumulators,
+                    mut raw_fragment,
+                    mut output_queue,
+                    mut deferred_passthrough,
+                } => {
+                    // Drain the output queue before polling for more input.
+                    if let Some(bytes) = output_queue.pop_front() {
+                        self.state = SseState::StreamingSse {
+                            inner,
+                            entries,
+                            session_key,
+                            provider,
+                            max_fake_len,
+                            accumulators,
+                            raw_fragment,
+                            output_queue,
+                            deferred_passthrough,
+                        };
+                        return Poll::Ready(Some(Ok(bytes)));
+                    }
+
+                    // Process any data already in raw_fragment before polling inner.
+                    // This handles the case where Detecting stored the first chunk
+                    // in raw_fragment but we haven't parsed it yet.
+                    if !raw_fragment.is_empty() {
+                        if let Err(e) = process_sse_chunk(
+                            &mut raw_fragment,
+                            &[], // no new bytes — just parse what's there
+                            &mut accumulators,
+                            &SseCtx {
+                                entries: &entries,
+                                session_key: &session_key,
+                                provider,
+                                max_fake_len,
+                            },
+                            &mut output_queue,
+                            &mut deferred_passthrough,
+                        ) {
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                        if !output_queue.is_empty() {
+                            self.state = SseState::StreamingSse {
+                                inner,
+                                entries,
+                                session_key,
+                                provider,
+                                max_fake_len,
+                                accumulators,
+                                raw_fragment,
+                                output_queue,
+                                deferred_passthrough,
+                            };
+                            continue;
+                        }
+                    }
+
+                    match inner.as_mut().poll_next(cx) {
+                        Poll::Ready(Some(Ok(chunk))) => {
+                            if let Err(e) = process_sse_chunk(
+                                &mut raw_fragment,
+                                &chunk,
+                                &mut accumulators,
+                                &SseCtx {
+                                    entries: &entries,
+                                    session_key: &session_key,
+                                    provider,
+                                    max_fake_len,
+                                },
+                                &mut output_queue,
+                                &mut deferred_passthrough,
+                            ) {
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                            self.state = SseState::StreamingSse {
+                                inner,
+                                entries,
+                                session_key,
+                                provider,
+                                max_fake_len,
+                                accumulators,
+                                raw_fragment,
+                                output_queue,
+                                deferred_passthrough,
+                            };
+                            continue;
+                        }
+                        Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                        Poll::Ready(None) => {
+                            // EOF: flush all remaining accumulation buffers.
+                            if let Err(e) = flush_all_accumulators(
+                                &mut accumulators,
+                                &entries,
+                                &session_key,
+                                &mut output_queue,
+                            ) {
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                            // Append non-text Gemini pass-through extras AFTER text frames.
+                            output_queue.extend(deferred_passthrough.drain(..));
+                            // Emit any trailing bytes that never completed a frame.
+                            if !raw_fragment.is_empty() {
+                                output_queue.push_back(Bytes::from(raw_fragment));
+                            }
+                            self.state = SseState::Emitting(output_queue);
+                            continue;
+                        }
+                        Poll::Pending => {
+                            self.state = SseState::StreamingSse {
+                                inner,
+                                entries,
+                                session_key,
+                                provider,
+                                max_fake_len,
+                                accumulators,
+                                raw_fragment,
+                                output_queue,
+                                deferred_passthrough,
+                            };
+                            return Poll::Pending;
+                        }
+                    }
+                }
+
                 SseState::Emitting(mut queue) => match queue.pop_front() {
                     Some(bytes) => {
                         if !queue.is_empty() {
@@ -676,28 +864,317 @@ impl Stream for SseRestoreStream {
                     }
                     None => return Poll::Ready(None),
                 },
+
                 SseState::Done => return Poll::Ready(None),
             }
         }
     }
 }
 
-async fn process_buffer(
-    raw: Vec<u8>,
-    entries: Vec<Entry>,
-    session_key: SessionKey,
+/// Shared context passed through the SSE processing helpers.
+struct SseCtx<'a> {
+    entries: &'a [Entry],
+    session_key: &'a SessionKey,
     provider: Provider,
-    is_sse: bool,
-) -> Result<VecDeque<Bytes>, io::Error> {
-    // Nothing to process for an empty buffer.
-    if raw.is_empty() {
-        return Ok(VecDeque::new());
+    max_fake_len: usize,
+}
+
+/// Appends `new_chunk` to `raw_fragment`, parses complete `\n\n`-terminated
+/// SSE frames, and flushes safe prefixes of accumulation buffers.
+fn process_sse_chunk(
+    raw_fragment: &mut Vec<u8>,
+    new_chunk: &[u8],
+    accumulators: &mut BTreeMap<FieldKey, String>,
+    ctx: &SseCtx<'_>,
+    output_queue: &mut VecDeque<Bytes>,
+    deferred_passthrough: &mut VecDeque<Bytes>,
+) -> io::Result<()> {
+    raw_fragment.extend_from_slice(new_chunk);
+    let s = match std::str::from_utf8(raw_fragment) {
+        Ok(s) => s.to_owned(),
+        // Incomplete multibyte sequence at chunk boundary — wait for more bytes.
+        Err(_) => return Ok(()),
+    };
+    let normalized = s.replace("\r\n", "\n");
+    let mut pos = 0usize;
+    let mut consumed = 0usize;
+    while let Some(rel_end) = normalized[pos..].find("\n\n") {
+        let frame_end = pos + rel_end + 2;
+        process_one_frame(
+            &normalized[pos..frame_end],
+            accumulators,
+            ctx,
+            output_queue,
+            deferred_passthrough,
+        )?;
+        consumed = frame_end;
+        pos = frame_end;
     }
-    if !is_sse {
-        // Non-SSE: run restore_stream on the raw bytes as a single-chunk in-memory stream.
-        return restore_non_sse(raw, entries, session_key).await;
+    // Store the tail (normalized, so \r\n is now \n) for the next chunk.
+    *raw_fragment = normalized.as_bytes()[consumed..].to_vec();
+    Ok(())
+}
+
+/// Processes one complete SSE frame (ends with `\n\n`).
+fn process_one_frame(
+    frame: &str,
+    accumulators: &mut BTreeMap<FieldKey, String>,
+    ctx: &SseCtx<'_>,
+    output_queue: &mut VecDeque<Bytes>,
+    deferred_passthrough: &mut VecDeque<Bytes>,
+) -> io::Result<()> {
+    let event_type = frame.lines().find_map(|l| l.strip_prefix("event: "));
+    let data_content = frame.lines().find_map(|l| l.strip_prefix("data: "));
+
+    let Some(data_str) = data_content else {
+        // No data line (comment / keep-alive): pass through immediately.
+        output_queue.push_back(Bytes::from(frame.as_bytes().to_vec()));
+        return Ok(());
+    };
+
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(data_str) else {
+        // Not JSON (e.g. "[DONE]"): pass through immediately.
+        output_queue.push_back(Bytes::from(frame.as_bytes().to_vec()));
+        return Ok(());
+    };
+
+    let extracted = extract_fields(&json, ctx.provider, event_type);
+    if extracted.is_empty() {
+        // Non-text delta (e.g. message_start): pass through immediately.
+        output_queue.push_back(Bytes::from(frame.as_bytes().to_vec()));
+        return Ok(());
     }
-    restore_sse(raw, entries, session_key, provider).await
+
+    for field in &extracted {
+        accumulators
+            .entry(field.key.clone())
+            .or_default()
+            .push_str(&field.text);
+    }
+
+    // For Gemini frames: collect non-text content that must pass through unchanged.
+    // These are queued as deferred pass-through frames emitted after the text flush.
+    if ctx.provider == Provider::Gemini {
+        let mut extra = serde_json::json!({});
+        // Top-level metadata fields that MUST NOT be modified (SPEC VC-SSE-12).
+        if let Some(v) = json.get("thoughtSignature") {
+            extra["thoughtSignature"] = v.clone();
+        }
+        if let Some(v) = json.get("groundingMetadata") {
+            extra["groundingMetadata"] = v.clone();
+        }
+        // Non-string functionCall args and function name (SPEC VC-SSE-11).
+        if let Some(parts) = json.pointer("/candidates/0/content/parts") {
+            if let Some(arr) = parts.as_array() {
+                for part in arr {
+                    if let Some(fc) = part.get("functionCall") {
+                        let mut fc_extra = serde_json::json!({});
+                        if let Some(name) = fc.get("name") {
+                            fc_extra["name"] = name.clone();
+                        }
+                        if let Some(args) = fc.get("args").and_then(|a| a.as_object()) {
+                            let non_str: serde_json::Map<String, serde_json::Value> = args
+                                .iter()
+                                .filter(|(_, v)| !v.is_string())
+                                .map(|(k, v)| (k.clone(), v.clone()))
+                                .collect();
+                            if !non_str.is_empty() {
+                                fc_extra["args"] = serde_json::Value::Object(non_str);
+                            }
+                        }
+                        if !fc_extra.as_object().unwrap().is_empty() {
+                            extra["candidates"] = serde_json::json!([{"content": {"parts": [{"functionCall": fc_extra}]}}]);
+                        }
+                    }
+                }
+            }
+        }
+        if !extra.as_object().unwrap().is_empty() {
+            let frame_str = format!("data: {}\n\n", serde_json::to_string(&extra).unwrap());
+            deferred_passthrough.push_back(Bytes::from(frame_str.into_bytes()));
+        }
+    }
+
+    // Flush any accumulation buffer whose safe prefix is ready.
+    for (key, accum) in accumulators.iter_mut() {
+        flush_safe_prefix(
+            key,
+            accum,
+            ctx.max_fake_len,
+            ctx.entries,
+            ctx.session_key,
+            output_queue,
+        )?;
+        flush_safe_prefix(
+            key,
+            accum,
+            ctx.max_fake_len,
+            ctx.entries,
+            ctx.session_key,
+            output_queue,
+        )?;
+    }
+
+    Ok(())
+}
+
+/// Flushes the safe prefix of one accumulation buffer into `output_queue`.
+///
+/// Safe prefix length = `accum.len() - max_fake_len`. Bytes within the hold
+/// window may still be part of a fake that spans the current boundary.
+fn flush_safe_prefix(
+    key: &FieldKey,
+    accum: &mut String,
+    max_fake_len: usize,
+    entries: &[Entry],
+    session_key: &SessionKey,
+    output_queue: &mut VecDeque<Bytes>,
+) -> io::Result<()> {
+    if accum.len() <= max_fake_len {
+        return Ok(());
+    }
+    let target = accum.len() - max_fake_len;
+    // Round down to the nearest char boundary.
+    let safe_len = accum[..target]
+        .char_indices()
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0);
+    if safe_len == 0 {
+        return Ok(());
+    }
+    let safe_prefix = accum[..safe_len].to_owned();
+
+    let mut input = std::io::Cursor::new(safe_prefix.as_bytes());
+    let mut output = Vec::new();
+    doppel_restore(&mut input, &mut output, entries, session_key)
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    let restored = String::from_utf8(output)
+        .map_err(|e| io::Error::other(format!("restore produced non-UTF8: {e}")))?;
+
+    if !restored.is_empty() {
+        output_queue.push_back(build_synthetic_sse_frame(key, &restored));
+    }
+    *accum = accum[safe_len..].to_owned();
+    Ok(())
+}
+
+/// Flushes all accumulation buffers completely (called at stream EOF).
+fn flush_all_accumulators(
+    accumulators: &mut BTreeMap<FieldKey, String>,
+    entries: &[Entry],
+    session_key: &SessionKey,
+    output_queue: &mut VecDeque<Bytes>,
+) -> io::Result<()> {
+    for (key, accum) in accumulators.iter_mut() {
+        if accum.is_empty() {
+            continue;
+        }
+        flush_safe_prefix(key, accum, 0, entries, session_key, output_queue)?;
+    }
+    Ok(())
+}
+
+/// Builds a synthetic SSE frame with `text` embedded in the correct JSON path
+/// for the given `FieldKey`. Frame granularity MAY differ from the original
+/// per SPEC.md §SSE-Aware Restore: Sliding Window.
+fn build_synthetic_sse_frame(key: &FieldKey, text: &str) -> Bytes {
+    let frame = match key {
+        FieldKey::AnthropicDelta { delta_type, index } => {
+            let value = match delta_type.as_str() {
+                "text_delta" => serde_json::json!({
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "text_delta", "text": text}
+                }),
+                "thinking_delta" => serde_json::json!({
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "thinking_delta", "thinking": text}
+                }),
+                "input_json_delta" => serde_json::json!({
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": "input_json_delta", "partial_json": text}
+                }),
+                other => serde_json::json!({
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {"type": other, "text": text}
+                }),
+            };
+            format!(
+                "event: content_block_delta\ndata: {}\n\n",
+                serde_json::to_string(&value).unwrap()
+            )
+        }
+        FieldKey::OpenAiContent => {
+            let v = serde_json::json!({"choices": [{"delta": {"content": text}}]});
+            format!("data: {}\n\n", serde_json::to_string(&v).unwrap())
+        }
+        FieldKey::OpenAiToolCall { index } => {
+            let v = serde_json::json!({
+                "choices": [{"delta": {"tool_calls": [{
+                    "index": index,
+                    "function": {"arguments": text}
+                }]}}]
+            });
+            format!("data: {}\n\n", serde_json::to_string(&v).unwrap())
+        }
+        FieldKey::OpenAiReasoning => {
+            let v = serde_json::json!({"choices": [{"delta": {"reasoning_content": text}}]});
+            format!("data: {}\n\n", serde_json::to_string(&v).unwrap())
+        }
+        FieldKey::OpenAiFunctionCallArgs => {
+            let v = serde_json::json!({
+                "choices": [{"delta": {"function_call": {"arguments": text}}}]
+            });
+            format!("data: {}\n\n", serde_json::to_string(&v).unwrap())
+        }
+        FieldKey::OpenAiRefusal => {
+            let v = serde_json::json!({"choices": [{"delta": {"refusal": text}}]});
+            format!("data: {}\n\n", serde_json::to_string(&v).unwrap())
+        }
+        FieldKey::ResponsesApiDelta { event_type } => {
+            let v = serde_json::json!({"delta": text});
+            format!(
+                "event: {}\ndata: {}\n\n",
+                event_type,
+                serde_json::to_string(&v).unwrap()
+            )
+        }
+        FieldKey::ResponsesApiDone { event_type } => {
+            let v = serde_json::json!({"text": text});
+            format!(
+                "event: {}\ndata: {}\n\n",
+                event_type,
+                serde_json::to_string(&v).unwrap()
+            )
+        }
+        FieldKey::GeminiText { .. } => {
+            let v = serde_json::json!({
+                "candidates": [{"content": {"parts": [{"text": text}]}}]
+            });
+            format!("data: {}\n\n", serde_json::to_string(&v).unwrap())
+        }
+        FieldKey::GeminiCodeExecOutput { .. } => {
+            let v = serde_json::json!({
+                "candidates": [{"content": {"parts": [{
+                    "codeExecutionResult": {"output": text}
+                }]}}]
+            });
+            format!("data: {}\n\n", serde_json::to_string(&v).unwrap())
+        }
+        FieldKey::GeminiFuncCallArg { arg_key, .. } => {
+            let v = serde_json::json!({
+                "candidates": [{"content": {"parts": [{
+                    "functionCall": {"args": {arg_key: text}}
+                }]}}]
+            });
+            format!("data: {}\n\n", serde_json::to_string(&v).unwrap())
+        }
+    };
+    Bytes::from(frame.into_bytes())
 }
 
 async fn restore_non_sse(
@@ -718,162 +1195,6 @@ async fn restore_non_sse(
         let bytes = chunk.map_err(|e| io::Error::other(e.to_string()))?;
         queue.push_back(bytes);
     }
-    Ok(queue)
-}
-
-async fn restore_sse(
-    raw: Vec<u8>,
-    entries: Vec<Entry>,
-    session_key: SessionKey,
-    provider: Provider,
-) -> Result<VecDeque<Bytes>, io::Error> {
-    // Step 1: Split into frames. SSE frames are separated by "\n\n".
-    // Include the "\n\n" terminator in each frame for round-trip fidelity.
-    let raw_str = String::from_utf8(raw)
-        .map_err(|e| io::Error::other(format!("SSE response contained non-UTF8 bytes: {e}")))?;
-    // Normalize \r\n → \n before splitting so both line-ending styles are handled.
-    // The WHATWG EventSource spec permits \r, \n, or \r\n line endings; providers
-    // that use \r\n\r\n frame separators would otherwise produce no split boundaries.
-    let normalized = raw_str.replace("\r\n", "\n");
-    let frames: Vec<&str> = normalized.split_inclusive("\n\n").collect();
-
-    struct ParsedFrame {
-        fields: Vec<FrameFieldContribution>,
-        json: Option<serde_json::Value>,
-        raw: String,
-    }
-
-    let mut parsed: Vec<ParsedFrame> = Vec::with_capacity(frames.len());
-    let mut accumulators: HashMap<FieldKey, String> = HashMap::new();
-
-    for frame in &frames {
-        let event_type = frame.lines().find_map(|l| l.strip_prefix("event: "));
-        let data_content = frame.lines().find_map(|l| l.strip_prefix("data: "));
-
-        let Some(data_str) = data_content else {
-            // No data line (comment-only frame or keep-alive). Pass through.
-            parsed.push(ParsedFrame {
-                fields: vec![],
-                json: None,
-                raw: frame.to_string(),
-            });
-            continue;
-        };
-
-        match serde_json::from_str::<serde_json::Value>(data_str) {
-            Err(_) => {
-                // Not JSON (e.g., "data: [DONE]"). Pass through.
-                parsed.push(ParsedFrame {
-                    fields: vec![],
-                    json: None,
-                    raw: frame.to_string(),
-                });
-            }
-            Ok(json) => {
-                let extracted = extract_fields(&json, provider, event_type);
-                let mut contribs: Vec<FrameFieldContribution> = Vec::with_capacity(extracted.len());
-                for field in extracted {
-                    let byte_len = field.text.len();
-                    accumulators
-                        .entry(field.key.clone())
-                        .or_default()
-                        .push_str(&field.text);
-                    contribs.push(FrameFieldContribution {
-                        key: field.key,
-                        byte_len,
-                        write_back: field.write_back,
-                    });
-                }
-                parsed.push(ParsedFrame {
-                    fields: contribs,
-                    json: Some(json),
-                    raw: frame.to_string(),
-                });
-            }
-        }
-    }
-
-    // If no text events found, nothing to restore — pass frames through unchanged.
-    if accumulators.is_empty() {
-        let mut queue = VecDeque::new();
-        for f in parsed {
-            queue.push_back(Bytes::from(f.raw.into_bytes()));
-        }
-        return Ok(queue);
-    }
-
-    // Run sync doppel::restore per accumulation buffer.
-    let mut restored_buffers: HashMap<FieldKey, String> = HashMap::new();
-    for (key, buf) in &accumulators {
-        let mut input = std::io::Cursor::new(buf.as_bytes());
-        let mut output = Vec::new();
-        doppel_restore(&mut input, &mut output, &entries, &session_key)
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        let restored = String::from_utf8(output)
-            .map_err(|e| io::Error::other(format!("restore produced non-UTF8: {e}")))?;
-        restored_buffers.insert(key.clone(), restored);
-    }
-
-    // Verify that each key's byte_len contributions sum to the accumulated buffer length.
-    debug_assert!(
-        accumulators.keys().all(|key| {
-            let sum: usize = parsed
-                .iter()
-                .flat_map(|f| f.fields.iter())
-                .filter(|c| &c.key == key)
-                .map(|c| c.byte_len)
-                .sum();
-            sum == accumulators[key].len()
-        }),
-        "per-key byte_len sum must equal accumulated buffer length"
-    );
-
-    // Redistribute restored text back into each frame.
-    // First frame for each key receives the full restored text; subsequent frames
-    // for the same key receive an empty string. This preserves the invariant that
-    // all restored content appears contiguously in the output while supporting
-    // multiple independent field keys.
-    let mut emitted: HashMap<FieldKey, bool> = HashMap::new();
-    let mut queue = VecDeque::new();
-
-    for mut frame in parsed {
-        if frame.fields.is_empty() {
-            queue.push_back(Bytes::from(frame.raw.into_bytes()));
-            continue;
-        }
-        let Some(mut json) = frame.json.take() else {
-            queue.push_back(Bytes::from(frame.raw.into_bytes()));
-            continue;
-        };
-
-        let mut write_pairs: Vec<(WriteBackInfo, String)> = Vec::new();
-        for contrib in &frame.fields {
-            let already_emitted = emitted.entry(contrib.key.clone()).or_insert(false);
-            let text = if !*already_emitted {
-                *already_emitted = true;
-                restored_buffers[&contrib.key].clone()
-            } else {
-                String::new()
-            };
-            write_pairs.push((contrib.write_back.clone(), text));
-        }
-        apply_restored_fields(&mut json, &write_pairs).map_err(io::Error::other)?;
-
-        // Reconstruct frame preserving non-data lines
-        let prefix_lines: String = frame
-            .raw
-            .lines()
-            .filter(|l| !l.starts_with("data:") && !l.is_empty())
-            .map(|l| format!("{l}\n"))
-            .collect();
-        let reconstructed = format!(
-            "{}data: {}\n\n",
-            prefix_lines,
-            serde_json::to_string(&json).map_err(|e| io::Error::other(e.to_string()))?
-        );
-        queue.push_back(Bytes::from(reconstructed.into_bytes()));
-    }
-
     Ok(queue)
 }
 
