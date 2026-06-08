@@ -4,7 +4,7 @@
 //! proxy pipeline:
 //!   - Phase 2: `doppel::swap` replaces real secrets with fakes before
 //!     the upstream sees the body.
-//!   - Phase 3: `doppel::restore_stream` restores originals in the
+//!   - Phase 3: `SseRestoreStream` restores originals in the
 //!     response stream before the response is cached and returned.
 //!
 //! SPEC ref: lcp-server/SPEC.md §Pipeline and Cache Interaction

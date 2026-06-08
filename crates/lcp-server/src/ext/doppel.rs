@@ -3,7 +3,7 @@
 //! Registered [`Pattern`]s (Tier 1 structural or Tier 2 registered) are applied
 //! to the request body in Phase 2 before it reaches the upstream.  Detected
 //! secrets are replaced with structurally-equivalent fakes; the originals are
-//! restored in Phase 3 via `RestoreStream` before the response is written to
+//! restored in Phase 3 via `SseRestoreStream` before the response is written to
 //! cache and returned to the client.
 //!
 //! # Phase interactions (per lcp-server SPEC §Pipeline and Cache Interaction)
@@ -131,7 +131,7 @@ impl Extension for DoppelExt {
         })
     }
 
-    /// Phase 3: wrap the response stream in `RestoreStream` to restore originals.
+    /// Phase 3: wrap the response stream in `SseRestoreStream` to restore originals.
     fn on_response_stream(
         &self,
         ctx: ProxyCtx,

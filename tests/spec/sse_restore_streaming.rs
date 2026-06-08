@@ -3,9 +3,9 @@
 //! These tests enforce that `SseRestoreStream` emits output before EOF
 //! (per-FieldKey sliding window), rather than buffering the entire stream.
 //!
-//! Tests 1 and 2 (`inv_sse_streaming_emits_before_eof` and
-//! `inv_sse_streaming_no_entries_passthrough_immediate`) FAIL against the
-//! current full-buffer implementation and PASS after the sliding-window fix.
+//! All three tests now pass against the sliding-window implementation and serve
+//! as regression guards: a future regression to full-buffering would cause
+//! tests 1 and 2 to time out and fail.
 //!
 //! Test 3 (`inv_sse_streaming_correctness_after_window`) passes on both
 //! implementations — it is a regression guard for correctness.
@@ -51,11 +51,10 @@ fn unbounded_receiver_to_stream(
 /// INV-SSE-WINDOW-1: SseRestoreStream MUST emit output before the source stream
 /// reaches EOF once the sliding window is full.
 ///
-/// With the current full-buffer implementation, no output is produced until the
-/// sender is dropped (EOF). This test sends `max_fake_len + 5` frames without
-/// closing the sender, then polls for output within a 2-second timeout.
-/// Full-buffer → timeout → assertion fails → test FAILS.
-/// Sliding-window → output before EOF → PASSES.
+/// The full-buffer approach produced no output until the sender was dropped
+/// (EOF). This test sends `max_fake_len + 5` frames without closing the sender,
+/// then polls for output within a 2-second timeout.
+/// Full-buffer → timeout → assertion fails. Sliding-window → PASSES.
 #[tokio::test]
 async fn inv_sse_streaming_emits_before_eof() {
     // NOT a real credential — synthetic Anthropic-format key matching the
@@ -87,7 +86,7 @@ async fn inv_sse_streaming_emits_before_eof() {
     // Send more than max_fake_len single-char frames WITHOUT closing the sender.
     // Unbounded sends are non-blocking — no deadlock risk.
     // A sliding-window implementation can start emitting after max_fake_len chars
-    // have accumulated; the full-buffer implementation waits for EOF.
+    // have accumulated; a full-buffer approach would wait for EOF instead.
     for _ in 0..(max_fake_len + 5) {
         tx.send(Ok(anthropic_text_delta_frame(0, "a"))).unwrap();
     }
@@ -113,7 +112,7 @@ async fn inv_sse_streaming_emits_before_eof() {
 /// INV-SSE-WINDOW-2: With no entries, every frame must pass through immediately
 /// (window size = 0, no accumulation required).
 ///
-/// Full-buffer implementation buffers even with no entries → timeout → FAILS.
+/// A full-buffer approach would buffer even with no entries → timeout → FAILS.
 /// Sliding-window: immediate passthrough → PASSES.
 #[tokio::test]
 async fn inv_sse_streaming_no_entries_passthrough_immediate() {
@@ -182,7 +181,7 @@ async fn inv_sse_streaming_correctness_after_window() {
         tx.send(Ok(anthropic_text_delta_frame(0, &ch.to_string())))
             .unwrap();
     }
-    // Drop sender to signal EOF so the full-buffer implementation can also complete.
+    // Signal EOF.
     drop(tx);
 
     // Collect all output.
