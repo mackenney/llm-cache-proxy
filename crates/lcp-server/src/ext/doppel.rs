@@ -1,6 +1,6 @@
 //! DoppelExt — Phase 2/3 secret-swapping extension backed by `doppel`.
 //!
-//! Registered [`Pattern`]s (Tier 1 structural or Tier 2 registered) are applied
+//! [`Pattern`]s — built-in structural (Anthropic, OpenAI, etc.) or user-registered secrets — are applied
 //! to the request body in Phase 2 before it reaches the upstream.  Detected
 //! secrets are replaced with structurally-equivalent fakes; the originals are
 //! restored in Phase 3 via `RestoreStream` before the response is written to
@@ -186,7 +186,7 @@ mod tests {
     use doppel::patterns;
     use futures_util::StreamExt;
 
-    // Synthetic test secrets matching Tier 1 structural patterns.
+    // Synthetic test secrets matching built-in structural patterns.
     // These are NOT real credentials.
     const ANT: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     const OPENAI: &[u8] = b"sk-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
