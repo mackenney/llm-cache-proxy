@@ -1038,7 +1038,7 @@ async fn restore_returns_secret_from_openrouter_sse_stream() {
     assert_absent(
         &resp_bytes,
         &[&fake_bytes],
-        "client OpenRouter SSE response: scrubbed fake must not be visible",
+        "client OpenRouter SSE response: swapped fake must not be visible",
     );
 }
 

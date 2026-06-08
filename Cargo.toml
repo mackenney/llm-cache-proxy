@@ -73,4 +73,4 @@ hex = "0.4"
 [patch.crates-io]
 # Local override until doppel is published — points to the completed
 # spec-unified-pattern worktree (Detector type, v3 patterns file, --identifier CLI).
-doppel = { path = "/home/ignacio/pr/doppel/.wt/spec-unified-pattern/doppel", features = ["async"] }
+doppel = { path = "/home/ignacio/pr/doppel/.wt/spec-unified-pattern/doppel" }
