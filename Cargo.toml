@@ -66,11 +66,6 @@ toml = "0.8"
 # Internal crates
 lcp-core = { path = "crates/lcp-core", version = "0.0.2" }
 lcp-server = { path = "crates/lcp-server", version = "0.0.2" }
-doppel = { version = "0.0.1", features = ["async"] }
+doppel = { version = "0.0.2", features = ["async"] }
 hex = "0.4"
 
-
-[patch.crates-io]
-# Local override until doppel is published — points to the completed
-# spec-unified-pattern worktree (Detector type, v3 patterns file, --identifier CLI).
-doppel = { path = "/home/ignacio/pr/doppel/.wt/spec-unified-pattern/doppel" }

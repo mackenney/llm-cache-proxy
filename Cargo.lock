@@ -555,7 +555,9 @@ dependencies = [
 
 [[package]]
 name = "doppel"
-version = "0.0.1"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96fa55f63e1f7231bb7c07903d40e16aca5ca95a0399d81a64fba75d262123ca"
 dependencies = [
  "aho-corasick",
  "base64",
