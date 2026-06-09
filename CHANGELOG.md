@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`DoppelExt` now pre-builds the Aho-Corasick automaton once at construction**
+  and shares it across requests via `Arc<Detector>`, instead of reconstructing
+  it on every Phase 1 call.
+
 - **SSE restore no longer buffers the full response.** Phase 3 now operates a
   per-field sliding window: restored text is emitted to the client as each SSE
   frame arrives, with at most `max_fake_len` bytes held in reserve to handle
