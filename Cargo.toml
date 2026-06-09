@@ -8,7 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Ignacio"]
@@ -64,7 +64,7 @@ chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 
 # Internal crates
-lcp-core = { path = "crates/lcp-core", version = "0.0.2" }
-lcp-server = { path = "crates/lcp-server", version = "0.0.2" }
+lcp-core = { path = "crates/lcp-core", version = "0.0.3" }
+lcp-server = { path = "crates/lcp-server", version = "0.0.3" }
 doppel = { version = "0.0.2", features = ["async"] }
 hex = "0.4"

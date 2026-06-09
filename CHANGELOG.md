@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+## [0.0.3] - 2026-06-09
+
 ### Changed
 
 - **`DoppelExt` now pre-builds the Aho-Corasick automaton once at construction**
@@ -100,6 +102,7 @@ Initial release.
   (e.g. `gemini-2.5-flash` from `/models/gemini-2.5-flash:generateContent`).
 
 <!-- next-url -->
-[Unreleased]: https://github.com/mackenney/llm-cache-proxy/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/mackenney/llm-cache-proxy/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/mackenney/llm-cache-proxy/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/mackenney/llm-cache-proxy/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/mackenney/llm-cache-proxy/tree/v0.0.1
