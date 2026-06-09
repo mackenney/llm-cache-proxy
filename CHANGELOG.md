@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+### Changed
+
+- **SSE restore no longer buffers the full response.** Phase 3 now operates a
+  per-field sliding window: restored text is emitted to the client as each SSE
+  frame arrives, with at most `max_fake_len` bytes held in reserve to handle
+  fakes that straddle frame boundaries. Initial TTFB latency is bounded by
+  `max_fake_len / text_generation_rate` (typically 500 ms – 4 s for standard
+  secret classes); after the initial hold, restored frames flow in real time.
+  The full-response-buffer approach has been removed.
+
 ## [0.0.2] - 2026-06-06
 
 ### Added

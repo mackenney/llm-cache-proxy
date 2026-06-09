@@ -42,6 +42,7 @@ Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, 
 - Code review fixes: frame reconstruction bug, UTF-8 chunk corruption, empty-chunk latch, partial-state error, hex crate, SPEC update (159 tests) — a834725
 - SSE multi-buffer field coverage: FieldKey/ExtractedField architecture, VC-SSE-1..13 (all providers), 3-round code review, E2E verified vs real APIs — cdf8fc5
 - Body size limit: `--body-limit` / `LCP_BODY_LIMIT` (default 100 MiB, 0 = no limit), `DefaultBodyLimit` on proxy routes, 2 spec invariants + 3 integration tests — 47747de
+- Sliding-window SSE restore: `SseRestoreStream` emits incrementally per-FieldKey (max_fake_len hold), synthetic frames, spec invariant tests — e71a2b5
 
 ---
 

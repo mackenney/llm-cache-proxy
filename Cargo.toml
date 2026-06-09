@@ -66,6 +66,5 @@ toml = "0.8"
 # Internal crates
 lcp-core = { path = "crates/lcp-core", version = "0.0.2" }
 lcp-server = { path = "crates/lcp-server", version = "0.0.2" }
-doppel = { path = "/home/ignacio/pr/doppel/.wt/spec-unified-pattern/doppel", features = ["async"] }
+doppel = { version = "0.0.2", features = ["async"] }
 hex = "0.4"
-

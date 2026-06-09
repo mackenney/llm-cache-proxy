@@ -324,6 +324,15 @@ writing them to the cache.
    the decrypted original.
 5. Re-encode the corrected text back into the SSE event and emit it.
 
+**Implementation — sliding window.** Phase 3 MUST NOT buffer the entire response
+before emitting output. `SseRestoreStream` implements the sliding-window algorithm
+specified in root `SPEC.md §SSE-Aware Restore: Sliding Window`: each FieldKey
+maintains an accumulation buffer; bytes beyond the `max_fake_len` hold window are
+safe to restore and emit immediately as synthetic frames with provider-specific
+JSON structure. At stream EOF the remaining hold buffer is flushed. Output flows
+in real time — TTFB latency is bounded by `max_fake_len / text_generation_rate`.
+Outbound frame granularity MAY differ from the original.
+
 #### Provider Content Fields
 
 Every field listed as MUST below MUST have its text extracted, accumulated,

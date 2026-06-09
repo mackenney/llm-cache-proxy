@@ -190,9 +190,47 @@ upstream providers do not apply compression to SSE streams.
 
 When the swap/restore extension is active, Phase 3 MUST apply restoring
 at the semantic SSE text level for streaming responses — raw byte-level
-matching is insufficient because fakes are split across `data:` events.
-See `crates/lcp-server/SPEC.md §SSE-Aware Restore`.
+matching is insufficient because fakes are distributed across the `text`
+fields of multiple `data:` events rather than appearing as contiguous bytes
+in the raw stream.
 
+### SSE-Aware Restore: Sliding Window
+
+Phase 3 MUST NOT buffer the entire response before emitting output. Instead
+it operates a per-field sliding window over the extracted text content of
+SSE events:
+
+1. As each SSE frame arrives, its provider-specific text field(s) are
+   extracted and appended to a per-`FieldKey` accumulation buffer.
+2. The hold window is sized to `max_fake_len = max { |fake_i| : fake_i ∈ entries }`
+   bytes. This is the minimum amount of text that must be held before any
+   bytes can safely be released: a fake of at most `max_fake_len` bytes
+   cannot straddle a region longer than `max_fake_len`.
+3. Whenever the accumulation buffer for a `FieldKey` exceeds `max_fake_len`
+   bytes, the prefix of length `buffer.len() - max_fake_len` is safe to
+   restore and emit. The restore operation (Aho-Corasick scan + AEAD decrypt
+   per match) runs on the safe prefix only.
+4. Restored text is re-embedded into outbound SSE frames. Because the safe
+   prefix boundary may fall mid-frame, outbound frames are synthetic: they
+   carry the same provider-specific JSON structure as the originals but with
+   restored text content. Frame granularity in the client-visible stream
+   MAY differ from the original.
+5. At stream EOF, the remaining hold (at most `max_fake_len` bytes per
+   `FieldKey`) is flushed: restore runs on the full remaining buffer and
+   the final frames are emitted.
+
+For non-SSE responses (chunked JSON), the same sliding window applies
+directly to the raw byte stream using `doppel::restore_stream`, which
+already implements this invariant.
+
+The initial TTFB latency introduced by the hold is bounded by
+`max_fake_len / text_generation_rate`. For typical structural fakes
+(≤200 bytes) at observed model generation rates (50–400 chars/s), this
+is in the range of 500 ms to 4 s. After the initial hold, restored text
+flows to the client in real time.
+
+See `crates/lcp-server/SPEC.md §SSE-Aware Restore` for field extraction
+details and provider-specific frame reconstruction.
 ## Tracing
 
 A client MAY attach a trace identifier to any request:
@@ -338,7 +376,7 @@ Enables the built-in swap/restore extension (backed by `doppel`).
 
 | Key | Default | Description |
 |---|---|---|
-| `secrets_file` | _(unset)_ | Path to an `doppel` TOML patterns file. `~` is expanded. |
+| `secrets_file` | _(unset)_ | Path to a `doppel` TOML patterns file (version 3). `~` is expanded. |
 
 Behaviour when the section is present:
 - `secrets_file` absent → warning at startup, swapping disabled.
@@ -346,7 +384,12 @@ Behaviour when the section is present:
 - `secrets_file` set, file valid → doppel extension loaded; all patterns in the file are active.
 
 Create a patterns file: `doppel init --patterns <path>`.
-Register secrets: `doppel register --patterns <path> --label <label>`.
+Register secrets: `doppel register --patterns <path> --identifier <id>`.
+
+The doppel extension pre-builds its combined Aho-Corasick detection automaton
+once at startup from all patterns in the file, rather than rebuilding it on
+every proxied request. This means startup cost is O(total pattern prefix bytes)
+and per-request swap cost is O(request body size).
 
 Example:
 ```toml

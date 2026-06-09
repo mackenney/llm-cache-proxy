@@ -112,8 +112,8 @@ cargo install doppel
 # Create a secrets file (adds built-in structural patterns for Anthropic, OpenAI, etc.)
 doppel init --patterns ~/.config/lcp/secrets.toml
 
-# Register any additional secrets you want scrubbed (e.g. internal tokens)
-doppel register --patterns ~/.config/lcp/secrets.toml --label my-token
+# Register any additional secrets you want swapped (e.g. internal tokens)
+doppel register --patterns ~/.config/lcp/secrets.toml --identifier my-token
 ```
 
 ### Enable in lcp config
