@@ -263,7 +263,14 @@ async fn handle_request(
             );
             let mut builder = Response::builder().status(status);
             for (k, v) in &headers {
-                builder = builder.header(k.as_str(), v.as_str());
+                // Skip headers that cannot be set on a streaming response to avoid
+                // builder errors; hop-by-hop headers are the usual culprit.
+                use axum::http::{HeaderName, HeaderValue};
+                if let (Ok(name), Ok(value)) =
+                    (k.parse::<HeaderName>(), HeaderValue::from_str(v.as_str()))
+                {
+                    builder = builder.header(name, value);
+                }
             }
             builder.body(Body::from_stream(stream)).unwrap()
         }

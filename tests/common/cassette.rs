@@ -50,16 +50,31 @@ impl Cassette {
             )
         });
 
+        // Strip hop-by-hop headers that axum manages itself and that cannot be
+        // set explicitly on a streaming response builder.
+        const HOP_BY_HOP: &[&str] = &[
+            "transfer-encoding",
+            "connection",
+            "keep-alive",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "te",
+            "trailers",
+            "upgrade",
+        ];
         let headers: Vec<(String, String)> = entry
             .headers
             .unwrap_or_default()
             .into_iter()
-            .map(|(k, v)| {
+            .filter_map(|(k, v)| {
+                if HOP_BY_HOP.iter().any(|h| k.to_lowercase() == *h) {
+                    return None;
+                }
                 let vs = match v {
                     toml::Value::String(s) => s,
                     other => other.to_string(),
                 };
-                (k, vs)
+                Some((k, vs))
             })
             .collect();
 

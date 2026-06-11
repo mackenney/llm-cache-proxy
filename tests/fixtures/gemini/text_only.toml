@@ -27,9 +27,9 @@ body = """
 [[response]]
 status = 200
 
-[response.headers]
-content-type = "text/event-stream"
-
 body_chunks = [
   "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"AIza7ciOdcWvIygdjjiM4Rqs80yKKt6j7GZo_hB\"}],\"role\": \"model\"},\"finishReason\": \"STOP\",\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 32,\"candidatesTokenCount\": 29,\"totalTokenCount\": 86,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 32}],\"thoughtsTokenCount\": 25,\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-2.5-flash\",\"responseId\": \"YjorasH_Cr2kqtsPuvHZ6Q8\"}\r\n\r\n",
 ]
+[response.headers]
+content-type = "text/event-stream"
+

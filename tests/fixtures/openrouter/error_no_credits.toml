@@ -26,10 +26,10 @@ body = """
 [[response]]
 status = 401
 
+body_chunks = [
+  "{\"error\":{\"message\":\"User not found.\",\"code\":401}}",
+]
 [response.headers]
 content-type = "application/json"
 transfer-encoding = "chunked"
 
-body_chunks = [
-  "{\"error\":{\"message\":\"User not found.\",\"code\":401}}",
-]

@@ -27,10 +27,10 @@ body = """
 [[response]]
 status = 200
 
-[response.headers]
-content-type = "text/event-stream"
-
 body_chunks = [
   "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"I cannot \\\"say\\\" it as I am a text-based AI and don't have a voice. However, I can provide the text for you\"}],\"role\": \"model\"},\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 32,\"candidatesTokenCount\": 31,\"totalTokenCount\": 145,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 32}],\"thoughtsTokenCount\": 82,\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-2.5-flash\",\"responseId\": \"ZjorasDHCd-VmtkP_a6huAs\"}\r\n\r\n",
   "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \":\\n\\nAIza7ciOdcWvIygdjjiM4Rqs80yKKt6j7GZo_hB\"}],\"role\": \"model\"},\"finishReason\": \"STOP\",\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 32,\"candidatesTokenCount\": 62,\"totalTokenCount\": 176,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 32}],\"thoughtsTokenCount\": 82,\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-2.5-flash\",\"responseId\": \"ZjorasDHCd-VmtkP_a6huAs\"}\r\n\r\n",
 ]
+[response.headers]
+content-type = "text/event-stream"
+

@@ -21,9 +21,9 @@ body = """
 [[response]]
 status = 400
 
-[response.headers]
-content-type = "application/json"
-
 body_chunks = [
   "{\n  \"error\": {\n    \"message\": \"Invalid 'max_output_tokens': integer below minimum value. Expected a value >= 16, but got 1 instead.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"max_output_tokens\",\n    \"code\": \"integer_below_min_value\"\n  }\n}",
 ]
+[response.headers]
+content-type = "application/json"
+

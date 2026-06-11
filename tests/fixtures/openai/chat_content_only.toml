@@ -26,10 +26,6 @@ body = """
 [[response]]
 status = 200
 
-[response.headers]
-content-type = "text/event-stream; charset=utf-8"
-transfer-encoding = "chunked"
-
 body_chunks = [
   "data: {\"id\":\"chatcmpl-DpiNmLwFsO8665TyCj2SlvVMph3Gz\",\"object\":\"chat.completion.chunk\",\"created\":1781217706,\"model\":\"gpt-4o-mini-2024-07-18\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_6066745a53\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"refusal\":null},\"logprobs\":null,\"finish_reason\":null}],\"obfuscation\":\"12035s\"}\n\n",
   "data: {\"id\":\"chatcmpl-DpiNmLwFsO8665TyCj2SlvVMph3Gz\",\"object\":\"chat.completion.chunk\",\"created\":1781217706,\"model\":\"gpt-4o-mini-2024-07-18\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_6066745a53\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"sk\"},\"logprobs\":null,\"finish_reason\":null}],\"obfuscation\":\"HNHFRC\"}\n\ndata: {\"id\":\"chatcmpl-DpiNmLwFsO8665TyCj2SlvVMph3Gz\",\"object\":\"chat.completion.chunk\",\"created\":1781217706,\"model\":\"gpt-4o-mini-2024-07-18\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_6066745a53\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"-t\"},\"logprobs\":null,\"finish_reason\":null}],\"obfuscation\":\"rXAuyQ\"}\n\n",
@@ -57,3 +53,7 @@ body_chunks = [
   "data: {\"id\":\"chatcmpl-DpiNmLwFsO8665TyCj2SlvVMph3Gz\",\"object\":\"chat.completion.chunk\",\"created\":1781217706,\"model\":\"gpt-4o-mini-2024-07-18\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_6066745a53\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"P\"},\"logprobs\":null,\"finish_reason\":null}],\"obfuscation\":\"iMybpTS\"}\n\ndata: {\"id\":\"chatcmpl-DpiNmLwFsO8665TyCj2SlvVMph3Gz\",\"object\":\"chat.completion.chunk\",\"created\":1781217706,\"model\":\"gpt-4o-mini-2024-07-18\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_6066745a53\",\"choices\":[{\"index\":0,\"delta\":{},\"logprobs\":null,\"finish_reason\":\"stop\"}],\"obfuscation\":\"JA\"}\n\n",
   "data: [DONE]\n\n",
 ]
+[response.headers]
+content-type = "text/event-stream; charset=utf-8"
+transfer-encoding = "chunked"
+

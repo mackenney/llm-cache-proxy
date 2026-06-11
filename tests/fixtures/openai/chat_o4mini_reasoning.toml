@@ -46,10 +46,6 @@ body = """
 [[response]]
 status = 200
 
-[response.headers]
-content-type = "text/event-stream; charset=utf-8"
-transfer-encoding = "chunked"
-
 body_chunks = [
   "data: {\"id\":\"chatcmpl-DpiNpyW67sNjaUZUBT9sRFuIBsCcV\",\"object\":\"chat.completion.chunk\",\"created\":1781217709,\"model\":\"o4-mini-2025-04-16\",\"service_tier\":\"default\",\"system_fingerprint\":null,\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"index\":0,\"id\":\"call_jV98YrWbrzd9gSlXfgaIJBZE\",\"type\":\"function\",\"function\":{\"name\":\"store_key\",\"arguments\":\"\"}}],\"refusal\":null},\"finish_reason\":null}],\"obfuscation\":\"Wc\"}\n\n",
   "data: {\"id\":\"chatcmpl-DpiNpyW67sNjaUZUBT9sRFuIBsCcV\",\"object\":\"chat.completion.chunk\",\"created\":1781217709,\"model\":\"o4-mini-2025-04-16\",\"service_tier\":\"default\",\"system_fingerprint\":null,\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"\"}}]},\"finish_reason\":null}],\"obfuscation\":\"MgLckZTFcJ\"}\n\ndata: {\"id\":\"chatcmpl-DpiNpyW67sNjaUZUBT9sRFuIBsCcV\",\"object\":\"chat.completion.chunk\",\"created\":1781217709,\"model\":\"o4-mini-2025-04-16\",\"service_tier\":\"default\",\"system_fingerprint\":null,\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"key\"}}]},\"finish_reason\":null}],\"obfuscation\":\"515g5piaEP\"}\n\n",
@@ -78,3 +74,7 @@ body_chunks = [
   "data: {\"id\":\"chatcmpl-DpiNpyW67sNjaUZUBT9sRFuIBsCcV\",\"object\":\"chat.completion.chunk\",\"created\":1781217709,\"model\":\"o4-mini-2025-04-16\",\"service_tier\":\"default\",\"system_fingerprint\":null,\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"}\"}}]},\"finish_reason\":null}],\"obfuscation\":\"RwBM0zUH7E\"}\n\ndata: {\"id\":\"chatcmpl-DpiNpyW67sNjaUZUBT9sRFuIBsCcV\",\"object\":\"chat.completion.chunk\",\"created\":1781217709,\"model\":\"o4-mini-2025-04-16\",\"service_tier\":\"default\",\"system_fingerprint\":null,\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"obfuscation\":\"5jfwIY40d9N\"}\n\n",
   "data: [DONE]\n\n",
 ]
+[response.headers]
+content-type = "text/event-stream; charset=utf-8"
+transfer-encoding = "chunked"
+

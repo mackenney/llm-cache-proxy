@@ -64,10 +64,6 @@ body = """
 [[response]]
 status = 200
 
-[response.headers]
-content-type = "text/event-stream; charset=utf-8"
-transfer-encoding = "chunked"
-
 body_chunks = [
   "data: {\"id\":\"chatcmpl-DpiNuDuRjGiTfvX4LmUyPzLD6qaJW\",\"object\":\"chat.completion.chunk\",\"created\":1781217714,\"model\":\"g",
   "pt-4o-mini-2024-07-18\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_e8d56911ec\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":null},\"logprobs\":null,\"finish_reason\":null}],\"obfuscation\":\"vRN\"}\n\n",
@@ -88,3 +84,7 @@ body_chunks = [
   "data: {\"id\":\"chatcmpl-DpiNuDuRjGiTfvX4LmUyPzLD6qaJW\",\"object\":\"chat.completion.chunk\",\"created\":1781217714,\"model\":\"gpt-4o-mini-2024-07-18\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_e8d56911ec\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"e0xugP\"}}]},\"logprobs\":null,\"finish_reason\":null}],\"obfuscation\":\"n3bWXRGd\"}\n\ndata: {\"id\":\"chatcmpl-DpiNuDuRjGiTfvX4LmUyPzLD6qaJW\",\"object\":\"chat.completion.chunk\",\"created\":1781217714,\"model\":\"gpt-4o-mini-2024-07-18\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_e8d56911ec\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"\\\"}\"}}]},\"logprobs\":null,\"finish_reason\":null}],\"obfuscation\":\"yoD9Won7XwB\"}\n\n",
   "data: {\"id\":\"chatcmpl-DpiNuDuRjGiTfvX4LmUyPzLD6qaJW\",\"object\":\"chat.completion.chunk\",\"created\":1781217714,\"model\":\"gpt-4o-mini-2024-07-18\",\"service_tier\":\"default\",\"system_fingerprint\":\"fp_e8d56911ec\",\"choices\":[{\"index\":0,\"delta\":{},\"logprobs\":null,\"finish_reason\":\"tool_calls\"}],\"obfuscation\":\"k8vbYWxd84gI\"}\n\ndata: [DONE]\n\n",
 ]
+[response.headers]
+content-type = "text/event-stream; charset=utf-8"
+transfer-encoding = "chunked"
+

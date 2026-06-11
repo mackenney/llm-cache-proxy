@@ -48,10 +48,10 @@ body = """
 [[response]]
 status = 200
 
-[response.headers]
-content-type = "text/event-stream"
-
 body_chunks = [
   "data: {\"candidates\": [{\"content\": {\"parts\": [{\"functionCall\": {\"name\": \"store_key\",\"args\": {\"key\": \"AIza7ciOdcWvIygdjjiM4Rqs80yKKt6j7GZo_hB\"}},\"thoughtSignature\": \"CiQBDDnWx6wPqXROu9UNkdbc09PmwR+7WO7RMTODPkFSc9ads4AKXgEMOdbHBJyp8BpxrNJX8jXoKFpMAh7gYEliqovaGFgjDgr0A7ToDxpk02GBkI2Xd2LnrCqtttTcqJmiZA/m7f1W80CwDwx6QZnDNqDebPfwcfp1vmVg961BnziJvNMK5QEBDDnWx55LJHzqN9dbMpqAk+xAf7RqDVkgDNE9eVY1echiIJNFCLHtIRYjSFiPQvtwrx1L0CtHPaKpg3aeZ3vWsfUINRmyr3VtHnEIKdfvHjeUX/04/x0mVDCfSHmVHnYKUVWGuDwKS15YO2gtAToBZ++jceG8swHJjID3jVzfXOwqCrNvJgAYPGyIDBx4+i32zuaWVBYLnFqopa5ZCw5oGANsUjTYKu5oLvbpOvSPC0SgSHdi9YK/VZuRwTGLX8opyjC1ESgGghCKINUa5+sR+vtNVQfAfFcgjpm+o1373jvH4ZCyCp0BAQw51se4rCO5LE9Yh3VBuMTRt32+i/5miHcv8CN7t5s+NuvA0dEMzdAX5NMT7zX9ympkH54ONJFq/GBvEh/zMnkzHHO490vZciB6MSPBzCbxk17kMV80NhZy",
   "j0T6r4wR7qyRylONfInydAgdkAw4+DBf2EjTgNb7tFHxJnRafEndB39td1PccZRhQzVj/q12S/QHy+TANXnYq39afQ==\"}],\"role\": \"model\"},\"finishReason\": \"STOP\",\"index\": 0,\"finishMessage\": \"Model generated function call(s).\"}],\"usageMetadata\": {\"promptTokenCount\": 75,\"candidatesTokenCount\": 43,\"totalTokenCount\": 212,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 75}],\"thoughtsTokenCount\": 94,\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-2.5-flash\",\"responseId\": \"Vjorar6xPKy9qtsPxLiP4Qw\"}\r\n\r\n",
 ]
+[response.headers]
+content-type = "text/event-stream"
+

@@ -26,10 +26,10 @@ body = """
 [[response]]
 status = 401
 
+body_chunks = [
+  "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"},\"request_id\":\"req_011CbxH7zaTT9u3uET1UDVRw\"}",
+]
 [response.headers]
 content-type = "application/json"
 transfer-encoding = "chunked"
 
-body_chunks = [
-  "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"},\"request_id\":\"req_011CbxH7zaTT9u3uET1UDVRw\"}",
-]
