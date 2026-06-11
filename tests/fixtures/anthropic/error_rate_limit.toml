@@ -1,0 +1,13 @@
+schema = 1
+provider = "anthropic"
+scenario = "ant_error_rate_limit"
+model = "claude-haiku-4-5"
+recorded_at = "2026-06-11"
+secret_kind = "anthropic"
+
+[[response]]
+status = 404
+
+body_chunks = [
+  "{\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"model: claude-nonexistent-model-99\"},\"request_id\":\"req_011CbxHYYDeEC4X7DP1PhQVP\"}",
+]

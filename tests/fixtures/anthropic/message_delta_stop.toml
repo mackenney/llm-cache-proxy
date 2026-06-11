@@ -1,0 +1,41 @@
+schema = 1
+provider = "anthropic"
+scenario = "ant_message_delta_stop"
+model = "claude-haiku-4-5"
+recorded_at = "2026-06-11"
+secret_kind = "anthropic"
+
+[request]
+method = "POST"
+path = "/v1/messages"
+content_type = "application/json"
+body = """
+{
+  "model": "claude-haiku-4-5",
+  "max_tokens": 50,
+  "stream": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Short reply: sk-ant-api03-YHOjo4QFlPuMBpMwoiKJAUG9T-6Rzvxy5ta0LVzHUjutnprDOM2_1M_Uwi8JF0AjsbhLjd3y1AWjf-fd4ipZhYtsUxeSYAA"
+    }
+  ]
+}
+"""
+
+[[response]]
+status = 200
+
+[response.headers]
+content-type = "text/event-stream; charset=utf-8"
+transfer-encoding = "chunked"
+cache-control = "no-cache"
+
+body_chunks = [
+  "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-haiku-4-5-20251001\",\"id\":\"msg_013kD94ewSp8YTGMYzHAa4Qs\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"stop_details\":null,\"usage\":{\"input_tokens\":97,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":0},\"output_tokens\":2,\"service_tier\":\"standard\",\"inference_geo\":\"not_available\"}}            }\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}   }\n\nevent: ping\ndata: {\"type\": \"ping\"}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"I can\"}        }\n\n",
+  "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"'t help with API keys or authentication tokens. If this is your\"}          }\n\n",
+  "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" real API key, please:\\n\\n1. **Revoke it immediately** in your account\"}     }\n\n",
+  "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" settings\\n2. **Generate a new one** to replace it\\n3.\"}       }\n\n",
+  "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+  "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\",\"stop_sequence\":null,\"stop_details\":null},\"usage\":{\"input_tokens\":97,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":50}             }\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"     }\n\n",
+]

@@ -1,0 +1,35 @@
+schema = 1
+provider = "gemini"
+scenario = "gem_error_quota"
+model = "gemini-2.5-flash"
+recorded_at = "2026-06-11"
+secret_kind = "gemini"
+
+[request]
+method = "POST"
+path = "/v1beta/models/gemini-2.5-flash:streamGenerateContent"
+content_type = "application/json"
+body = """
+{
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "hi"
+        }
+      ]
+    }
+  ]
+}
+"""
+
+[[response]]
+status = 400
+
+[response.headers]
+content-type = "application/json; charset=UTF-8"
+
+body_chunks = [
+  "[{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"API key not valid. Please pass a valid API key.\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"API_KEY_INVALID\",\n        \"domain\": \"googleapis.com\",\n        \"metadata\": {\n          \"service\": \"generativelanguage.googleapis.com\"\n        }\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.LocalizedMessage\",\n        \"locale\": \"en-US\",\n        \"message\": \"API key not valid. Please pass a valid API key.\"\n      }\n    ]\n  }\n}\n]",
+]

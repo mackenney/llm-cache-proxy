@@ -1,0 +1,35 @@
+schema = 1
+provider = "openrouter"
+scenario = "or_error_no_credits"
+model = "anthropic/claude-haiku-4-5"
+recorded_at = "2026-06-11"
+secret_kind = "openai_classic"
+
+[request]
+method = "POST"
+path = "/v1/chat/completions"
+content_type = "application/json"
+body = """
+{
+  "model": "anthropic/claude-haiku-4-5",
+  "max_tokens": 10,
+  "stream": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "hi"
+    }
+  ]
+}
+"""
+
+[[response]]
+status = 401
+
+[response.headers]
+content-type = "application/json"
+transfer-encoding = "chunked"
+
+body_chunks = [
+  "{\"error\":{\"message\":\"User not found.\",\"code\":401}}",
+]

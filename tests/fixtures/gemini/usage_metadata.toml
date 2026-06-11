@@ -1,0 +1,36 @@
+schema = 1
+provider = "gemini"
+scenario = "gem_usage_metadata"
+model = "gemini-2.5-flash"
+recorded_at = "2026-06-11"
+secret_kind = "gemini"
+
+[request]
+method = "POST"
+path = "/v1beta/models/gemini-2.5-flash:streamGenerateContent"
+content_type = "application/json"
+body = """
+{
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "Say: AIza7ciOdcWvIygdjjiM4Rqs80yKKt6j7GZo_hB"
+        }
+      ]
+    }
+  ]
+}
+"""
+
+[[response]]
+status = 200
+
+[response.headers]
+content-type = "text/event-stream"
+
+body_chunks = [
+  "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"I cannot \\\"say\\\" it as I am a text-based AI and don't have a voice. However, I can provide the text for you\"}],\"role\": \"model\"},\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 32,\"candidatesTokenCount\": 31,\"totalTokenCount\": 145,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 32}],\"thoughtsTokenCount\": 82,\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-2.5-flash\",\"responseId\": \"ZjorasDHCd-VmtkP_a6huAs\"}\r\n\r\n",
+  "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \":\\n\\nAIza7ciOdcWvIygdjjiM4Rqs80yKKt6j7GZo_hB\"}],\"role\": \"model\"},\"finishReason\": \"STOP\",\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 32,\"candidatesTokenCount\": 62,\"totalTokenCount\": 176,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 32}],\"thoughtsTokenCount\": 82,\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-2.5-flash\",\"responseId\": \"ZjorasDHCd-VmtkP_a6huAs\"}\r\n\r\n",
+]
