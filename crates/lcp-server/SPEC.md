@@ -300,8 +300,9 @@ wire carried only fakes.
 ### SSE-Aware Restore
 
 Phase 3 MUST apply restoring at the **semantic SSE text level** for
-responses where the first bytes of the stream match the `data: ` or `event: `
-SSE prefix. Anthropic streams begin with a named `event:` line (e.g.,
+responses where the first bytes of the stream match the `data: `, `data:`,
+`event: `, or `event:` SSE prefix (both spaced and spaceless forms are
+accepted). Anthropic streams begin with a named `event:` line (e.g.,
 `event: message_start`) before the `data:` line, so the first bytes are
 `event: ` rather than `data: `. The non-SSE (plain JSON) response path MUST
 continue to use byte-level restore unchanged — it works correctly there.
@@ -521,15 +522,6 @@ error or edge-case frames that carry only a finish signal.
 | Signal | Scope | Buffers flushed |
 |---|---|---|
 | Frame with non-null `finishReason` and no extractable content | Stream | All |
-
-#### Multi-Field Accumulation
-
-A single response stream MAY contain multiple independent content-bearing
-fields (e.g., an Anthropic response with both `thinking_delta` and
-`text_delta` blocks, or an OpenAI response with `content` and `tool_calls`).
-Each distinct content field MUST maintain its own independent accumulation
-buffer. Fakes MUST NOT be matched across the boundaries of different content
-fields.
 
 #### Verifiable Conditions
 

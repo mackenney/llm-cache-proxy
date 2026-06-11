@@ -76,10 +76,11 @@ enum WriteBackInfo {
 
 /// Returns `true` if the first bytes of a response chunk look like an SSE stream.
 ///
-/// Detects `data:`, `event:`, and `: ` (SSE comment) line starters. Anthropic's
-/// real API prefixes each data line with a named `event:` line. OpenRouter prefixes
-/// the stream with a `\`: OPENROUTER PROCESSING` comment before any data lines.
-/// Non-SSE JSON responses begin with `{` or `[`.
+/// Detects `data: `, `data:` (spaceless), `event: `, `event:` (spaceless), `": "` (SSE
+/// comment with space), and `":"` followed by newline (empty SSE comment, no space).
+/// Anthropic's real API prefixes each data line with a named `event:` line.
+/// OpenRouter prefixes the stream with a `": OPENROUTER PROCESSING` comment before
+/// any data lines. Non-SSE JSON responses begin with `{` or `[`.
 pub fn is_sse_first_chunk(bytes: &[u8]) -> bool {
     bytes.starts_with(b"data:")
         || bytes.starts_with(b"event:")
@@ -2466,6 +2467,40 @@ mod tests {
             accumulators[&FieldKey::GeminiText { thought: false }],
             "held_content",
             "[DONE] under Gemini MUST NOT flush the accumulator"
+        );
+        assert_eq!(output_queue.len(), 1, "[DONE] frame must pass through");
+    }
+
+    #[test]
+    fn process_one_frame_done_spaceless_under_gemini_does_not_flush() {
+        // A spaceless "data:[DONE]" under Gemini MUST NOT trigger a flush,
+        // same as the spaced form. Gemini terminates with finishReason (JSON).
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(
+            FieldKey::GeminiText { thought: false },
+            "held_content".to_owned(),
+        );
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let ctx = SseCtx {
+            entries: &[],
+            session_key: &session_key,
+            provider: Provider::Gemini,
+            max_fake_len: 0,
+        };
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        let mut deferred: VecDeque<Bytes> = VecDeque::new();
+        process_one_frame(
+            "data:[DONE]\n\n",
+            &mut accumulators,
+            &ctx,
+            &mut output_queue,
+            &mut deferred,
+        )
+        .unwrap();
+        assert_eq!(
+            accumulators[&FieldKey::GeminiText { thought: false }],
+            "held_content",
+            "spaceless [DONE] under Gemini MUST NOT flush the accumulator"
         );
         assert_eq!(output_queue.len(), 1, "[DONE] frame must pass through");
     }

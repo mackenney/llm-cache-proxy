@@ -300,6 +300,10 @@ async fn vc_sse_15_anthropic_message_stop_ordering() {
         let sp = pos(&output, secret_str);
         let mp = pos(&output, "message_stop");
         assert!(
+            !output.contains(&fake_str),
+            "VC-SSE-15 (message_stop): fake must not appear in output"
+        );
+        assert!(
             sp < mp,
             "VC-SSE-15 (message_stop): secret (pos {sp}) MUST appear before message_stop (pos {mp})"
         );
@@ -336,6 +340,10 @@ async fn vc_sse_15_anthropic_message_stop_ordering() {
         let sp = pos(&output, secret_str);
         let mp = pos(&output, "message_delta");
         assert!(
+            !output.contains(&fake_str),
+            "VC-SSE-15 (message_delta): fake must not appear in output"
+        );
+        assert!(
             sp < mp,
             "VC-SSE-15 (message_delta): secret (pos {sp}) MUST appear before message_delta (pos {mp})"
         );
@@ -359,7 +367,13 @@ async fn vc_sse_16_anthropic_block_stop_isolation() {
         "marker ({}) must be shorter than max_fake_len ({max_fake_len}) for the hold invariant",
         MARKER.len()
     );
-    let fake_str = String::from_utf8(result.entries[0].fake.clone()).unwrap();
+    let fake_entry = result.entries.iter().max_by_key(|e| e.fake.len()).unwrap();
+    let fake_str = String::from_utf8(fake_entry.fake.clone()).unwrap();
+    assert_eq!(
+        fake_str.len(),
+        max_fake_len,
+        "sizing invariant: fake must equal max_fake_len"
+    );
     let secret_str = std::str::from_utf8(SECRET).unwrap();
     let a = fake_str.len() / 3;
     let b = 2 * fake_str.len() / 3;
@@ -389,6 +403,10 @@ async fn vc_sse_16_anthropic_block_stop_isolation() {
     let cp = pos(&output, "content_block_stop");
     let mp = pos(&output, MARKER);
 
+    assert!(
+        !output.contains(&fake_str),
+        "VC-SSE-16: fake must not appear in output"
+    );
     assert!(
         sp < cp,
         "VC-SSE-16: block 0 secret (pos {sp}) MUST appear before content_block_stop (pos {cp})"
@@ -572,7 +590,14 @@ async fn vc_sse_18_responses_api_done_ordering() {
         !result.entries.is_empty(),
         "doppel must detect the synthetic key"
     );
-    let fake_str = String::from_utf8(result.entries[0].fake.clone()).unwrap();
+    let max_fake_len = result.entries.iter().map(|e| e.fake.len()).max().unwrap();
+    let fake_entry = result.entries.iter().max_by_key(|e| e.fake.len()).unwrap();
+    let fake_str = String::from_utf8(fake_entry.fake.clone()).unwrap();
+    assert_eq!(
+        fake_str.len(),
+        max_fake_len,
+        "sizing invariant: fake must equal max_fake_len"
+    );
     let secret_str = std::str::from_utf8(SECRET).unwrap();
     let a = fake_str.len() / 3;
     let b = 2 * fake_str.len() / 3;
@@ -602,6 +627,10 @@ async fn vc_sse_18_responses_api_done_ordering() {
     let ip = pos(&output, "response.output_item.done");
     let rp = pos(&output, "response.completed");
     assert!(
+        !output.contains(&fake_str),
+        "VC-SSE-18: fake must not appear in output"
+    );
+    assert!(
         sp < cp,
         "VC-SSE-18: secret (pos {sp}) MUST appear before response.content_part.done (pos {cp})"
     );
@@ -618,11 +647,10 @@ async fn vc_sse_18_responses_api_done_ordering() {
 /// VC-SSE-19: a Gemini frame with co-located content + `finishReason` MUST be routed
 /// as path B (content accumulation), not path A (terminal-only handling).
 ///
-/// If the implementation incorrectly routes to path A, the content is not accumulated
-/// and the fake leaks through the forwarded frame — `assert_absent(fake)` would fail.
+/// Assertions on content accumulation pass today. The `finishReason` preservation
+/// is a known gap (see §Known Limitations).
 #[tokio::test]
-#[ignore = "known gap: co-located finishReason dropped by path-B (see SPEC.md Known Gaps)"]
-async fn vc_sse_19_gemini_finish_reason_colocated() {
+async fn vc_sse_19_gemini_colocated_content_is_accumulated() {
     let result = doppel::swap(SECRET, &doppel::patterns::all()).unwrap();
     assert!(
         !result.entries.is_empty(),
@@ -639,7 +667,6 @@ async fn vc_sse_19_gemini_finish_reason_colocated() {
         Provider::Gemini,
     );
 
-    // Single frame with both content (the full fake == max_fake_len) and finishReason.
     tx.send(Ok(gemini_colocated(&fake_str))).unwrap();
     drop(tx);
 
@@ -653,6 +680,32 @@ async fn vc_sse_19_gemini_finish_reason_colocated() {
         !output.contains(&fake_str),
         "VC-SSE-19: fake must not appear in output"
     );
+}
+
+/// VC-SSE-19 (gap): co-located `finishReason` is currently dropped by path-B.
+#[tokio::test]
+#[ignore = "known gap: co-located finishReason dropped by path-B (see SPEC.md §Known Limitations)"]
+async fn vc_sse_19_gemini_colocated_finish_reason_preserved() {
+    let result = doppel::swap(SECRET, &doppel::patterns::all()).unwrap();
+    assert!(
+        !result.entries.is_empty(),
+        "doppel must detect the synthetic key"
+    );
+    let fake_str = String::from_utf8(result.entries[0].fake.clone()).unwrap();
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Bytes, io::Error>>();
+    let restore = SseRestoreStream::new(
+        unbounded_receiver_to_stream(rx),
+        result.entries,
+        result.session_key,
+        Provider::Gemini,
+    );
+
+    tx.send(Ok(gemini_colocated(&fake_str))).unwrap();
+    drop(tx);
+
+    let output = collect_all(restore).await;
+
     assert!(
         output.contains("STOP"),
         "finishReason must be present in output (currently a known gap)"
@@ -697,6 +750,10 @@ async fn vc_sse_20_gemini_empty_terminal_ordering() {
 
     let sp = pos(&output, secret_str);
     let fp = pos(&output, "finishReason");
+    assert!(
+        !output.contains(&fake_str),
+        "VC-SSE-20: fake must not appear in output"
+    );
     assert!(
         sp < fp,
         "VC-SSE-20: secret (pos {sp}) MUST appear before finishReason (pos {fp})"
@@ -760,4 +817,115 @@ async fn vc_sse_12_gemini_deferred_metadata_ordering() {
         gp < fp,
         "VC-SSE-12: groundingMetadata (pos {gp}) MUST appear before finishReason (pos {fp})"
     );
+}
+
+/// VC-SSE-17d: `[DONE]` alone MUST flush all buffers under `Provider::OpenRouter`,
+/// identical to the OpenAI case covered by `vc_sse_17b`.
+#[tokio::test]
+async fn vc_sse_17d_openrouter_done_ordering() {
+    let result = doppel::swap(SECRET, &doppel::patterns::all()).unwrap();
+    assert!(
+        !result.entries.is_empty(),
+        "doppel must detect the synthetic key"
+    );
+    let max_fake_len = result.entries.iter().map(|e| e.fake.len()).max().unwrap();
+    let fake_entry = result.entries.iter().max_by_key(|e| e.fake.len()).unwrap();
+    let fake_str = String::from_utf8(fake_entry.fake.clone()).unwrap();
+    assert_eq!(
+        fake_str.len(),
+        max_fake_len,
+        "sizing invariant: fake must equal max_fake_len"
+    );
+    let secret_str = std::str::from_utf8(SECRET).unwrap();
+    let mid = fake_str.len() / 2;
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Bytes, io::Error>>();
+    let restore = SseRestoreStream::new(
+        unbounded_receiver_to_stream(rx),
+        result.entries,
+        result.session_key,
+        Provider::OpenRouter,
+    );
+
+    tx.send(Ok(openai_tool_call_delta(0, &fake_str[..mid])))
+        .unwrap();
+    tx.send(Ok(openai_tool_call_delta(0, &fake_str[mid..])))
+        .unwrap();
+    tx.send(Ok(openai_done())).unwrap();
+    drop(tx);
+
+    let output = collect_all(restore).await;
+
+    assert!(
+        !output.contains(&fake_str),
+        "VC-SSE-17d: fake must not appear in output"
+    );
+    let sp = pos(&output, secret_str);
+    let dp = pos(&output, "[DONE]");
+    assert!(
+        sp < dp,
+        "VC-SSE-17d: secret (pos {sp}) MUST appear before [DONE] (pos {dp})"
+    );
+}
+
+/// VC-SSE-18b: error Responses API terminals (`response.failed`, `response.cancelled`,
+/// `response.incomplete`) MUST also flush all accumulators before being forwarded.
+#[tokio::test]
+async fn vc_sse_18b_responses_api_error_terminal_ordering() {
+    for (event_type, search_str) in [
+        ("response.failed", "response.failed"),
+        ("response.cancelled", "response.cancelled"),
+        ("response.incomplete", "response.incomplete"),
+    ] {
+        let result = doppel::swap(SECRET, &doppel::patterns::all()).unwrap();
+        assert!(
+            !result.entries.is_empty(),
+            "doppel must detect the synthetic key"
+        );
+        let max_fake_len = result.entries.iter().map(|e| e.fake.len()).max().unwrap();
+        let fake_entry = result.entries.iter().max_by_key(|e| e.fake.len()).unwrap();
+        let fake_str = String::from_utf8(fake_entry.fake.clone()).unwrap();
+        assert_eq!(
+            fake_str.len(),
+            max_fake_len,
+            "sizing invariant: fake must equal max_fake_len ({event_type})"
+        );
+        let secret_str = std::str::from_utf8(SECRET).unwrap();
+        let a = fake_str.len() / 3;
+        let b = 2 * fake_str.len() / 3;
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Bytes, io::Error>>();
+        let restore = SseRestoreStream::new(
+            unbounded_receiver_to_stream(rx),
+            result.entries,
+            result.session_key,
+            Provider::OpenAi,
+        );
+
+        tx.send(Ok(responses_text_delta(&fake_str[..a]))).unwrap();
+        tx.send(Ok(responses_text_delta(&fake_str[a..b]))).unwrap();
+        tx.send(Ok(responses_text_delta(&fake_str[b..]))).unwrap();
+        let error_frame = {
+            let json = serde_json::json!({"type": event_type});
+            bytes::Bytes::from(format!(
+                "event: {event_type}\ndata: {}\n\n",
+                serde_json::to_string(&json).unwrap()
+            ))
+        };
+        tx.send(Ok(error_frame)).unwrap();
+        drop(tx);
+
+        let output = collect_all(restore).await;
+
+        assert!(
+            !output.contains(&fake_str),
+            "VC-SSE-18b ({event_type}): fake must not appear in output"
+        );
+        let sp = pos(&output, secret_str);
+        let ep = pos(&output, search_str);
+        assert!(
+            sp < ep,
+            "VC-SSE-18b ({event_type}): secret (pos {sp}) MUST appear before {event_type} (pos {ep})"
+        );
+    }
 }
