@@ -950,9 +950,9 @@ fn process_one_frame(
     let Ok(json) = serde_json::from_str::<serde_json::Value>(data_str) else {
         // "[DONE]" is the Chat Completions stream terminator (OpenAI/OpenRouter
         // only): complete-flush all buffers before forwarding (SPEC VC-SSE-17).
-        // Other non-JSON data passes through without a flush. Anthropic and
-        // Gemini terminate with JSON signals (message_stop, finishReason)
-        // already handled by classify_terminal above.
+        // Anthropic and Gemini never emit [DONE]; they use JSON terminals
+        // (message_stop, finishReason). The provider guard prevents spurious
+        // flushes from stray non-JSON frames.
         if data_str.trim() == "[DONE]"
             && matches!(ctx.provider, Provider::OpenAi | Provider::OpenRouter)
         {

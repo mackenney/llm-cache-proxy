@@ -583,65 +583,150 @@ async fn vc_sse_17c_openai_done_spaceless_ordering() {
 }
 
 /// VC-SSE-18: synthetic frames MUST appear before each Responses API terminal event.
+///
+/// Three independent sub-cases each preload a fresh accumulator to `max_fake_len` bytes
+/// before a single terminal, so no sub-case's assertions are vacuous due to an earlier flush.
 #[tokio::test]
 async fn vc_sse_18_responses_api_done_ordering() {
-    let result = doppel::swap(SECRET, &doppel::patterns::all()).unwrap();
-    assert!(
-        !result.entries.is_empty(),
-        "doppel must detect the synthetic key"
-    );
-    let max_fake_len = result.entries.iter().map(|e| e.fake.len()).max().unwrap();
-    let fake_entry = result.entries.iter().max_by_key(|e| e.fake.len()).unwrap();
-    let fake_str = String::from_utf8(fake_entry.fake.clone()).unwrap();
-    assert_eq!(
-        fake_str.len(),
-        max_fake_len,
-        "sizing invariant: fake must equal max_fake_len"
-    );
     let secret_str = std::str::from_utf8(SECRET).unwrap();
-    let a = fake_str.len() / 3;
-    let b = 2 * fake_str.len() / 3;
 
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Bytes, io::Error>>();
-    let restore = SseRestoreStream::new(
-        unbounded_receiver_to_stream(rx),
-        result.entries,
-        result.session_key,
-        Provider::OpenAi,
-    );
+    // Sub-case A: delta×3 → response.content_part.done
+    {
+        let result = doppel::swap(SECRET, &doppel::patterns::all()).unwrap();
+        assert!(
+            !result.entries.is_empty(),
+            "doppel must detect the synthetic key"
+        );
+        let max_fake_len = result.entries.iter().map(|e| e.fake.len()).max().unwrap();
+        let fake_entry = result.entries.iter().max_by_key(|e| e.fake.len()).unwrap();
+        let fake_str = String::from_utf8(fake_entry.fake.clone()).unwrap();
+        assert_eq!(
+            fake_str.len(),
+            max_fake_len,
+            "sizing invariant: fake must equal max_fake_len (content_part.done)"
+        );
+        let a = fake_str.len() / 3;
+        let b = 2 * fake_str.len() / 3;
 
-    // Split fake across three response.output_text.delta frames (total == max_fake_len).
-    tx.send(Ok(responses_text_delta(&fake_str[..a]))).unwrap();
-    tx.send(Ok(responses_text_delta(&fake_str[a..b]))).unwrap();
-    tx.send(Ok(responses_text_delta(&fake_str[b..]))).unwrap();
-    // Path-A terminal frames: no extractable content — each triggers a stream flush.
-    tx.send(Ok(responses_content_part_done())).unwrap();
-    tx.send(Ok(responses_output_item_done())).unwrap();
-    tx.send(Ok(responses_completed())).unwrap();
-    drop(tx);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Bytes, io::Error>>();
+        let restore = SseRestoreStream::new(
+            unbounded_receiver_to_stream(rx),
+            result.entries,
+            result.session_key,
+            Provider::OpenAi,
+        );
 
-    let output = collect_all(restore).await;
+        tx.send(Ok(responses_text_delta(&fake_str[..a]))).unwrap();
+        tx.send(Ok(responses_text_delta(&fake_str[a..b]))).unwrap();
+        tx.send(Ok(responses_text_delta(&fake_str[b..]))).unwrap();
+        tx.send(Ok(responses_content_part_done())).unwrap();
+        drop(tx);
 
-    let sp = pos(&output, secret_str);
-    let cp = pos(&output, "response.content_part.done");
-    let ip = pos(&output, "response.output_item.done");
-    let rp = pos(&output, "response.completed");
-    assert!(
-        !output.contains(&fake_str),
-        "VC-SSE-18: fake must not appear in output"
-    );
-    assert!(
-        sp < cp,
-        "VC-SSE-18: secret (pos {sp}) MUST appear before response.content_part.done (pos {cp})"
-    );
-    assert!(
-        sp < ip,
-        "VC-SSE-18: secret (pos {sp}) MUST appear before response.output_item.done (pos {ip})"
-    );
-    assert!(
-        sp < rp,
-        "VC-SSE-18: secret (pos {sp}) MUST appear before response.completed (pos {rp})"
-    );
+        let output = collect_all(restore).await;
+
+        assert!(
+            !output.contains(&fake_str),
+            "VC-SSE-18 (content_part.done): fake must not appear in output"
+        );
+        let sp = pos(&output, secret_str);
+        let cp = pos(&output, "response.content_part.done");
+        assert!(
+            sp < cp,
+            "VC-SSE-18: secret (pos {sp}) MUST appear before response.content_part.done (pos {cp})"
+        );
+    }
+
+    // Sub-case B: delta×3 → response.output_item.done
+    {
+        let result = doppel::swap(SECRET, &doppel::patterns::all()).unwrap();
+        assert!(
+            !result.entries.is_empty(),
+            "doppel must detect the synthetic key"
+        );
+        let max_fake_len = result.entries.iter().map(|e| e.fake.len()).max().unwrap();
+        let fake_entry = result.entries.iter().max_by_key(|e| e.fake.len()).unwrap();
+        let fake_str = String::from_utf8(fake_entry.fake.clone()).unwrap();
+        assert_eq!(
+            fake_str.len(),
+            max_fake_len,
+            "sizing invariant: fake must equal max_fake_len (output_item.done)"
+        );
+        let a = fake_str.len() / 3;
+        let b = 2 * fake_str.len() / 3;
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Bytes, io::Error>>();
+        let restore = SseRestoreStream::new(
+            unbounded_receiver_to_stream(rx),
+            result.entries,
+            result.session_key,
+            Provider::OpenAi,
+        );
+
+        tx.send(Ok(responses_text_delta(&fake_str[..a]))).unwrap();
+        tx.send(Ok(responses_text_delta(&fake_str[a..b]))).unwrap();
+        tx.send(Ok(responses_text_delta(&fake_str[b..]))).unwrap();
+        tx.send(Ok(responses_output_item_done())).unwrap();
+        drop(tx);
+
+        let output = collect_all(restore).await;
+
+        assert!(
+            !output.contains(&fake_str),
+            "VC-SSE-18 (output_item.done): fake must not appear in output"
+        );
+        let sp = pos(&output, secret_str);
+        let ip = pos(&output, "response.output_item.done");
+        assert!(
+            sp < ip,
+            "VC-SSE-18: secret (pos {sp}) MUST appear before response.output_item.done (pos {ip})"
+        );
+    }
+
+    // Sub-case C: delta×3 → response.completed
+    {
+        let result = doppel::swap(SECRET, &doppel::patterns::all()).unwrap();
+        assert!(
+            !result.entries.is_empty(),
+            "doppel must detect the synthetic key"
+        );
+        let max_fake_len = result.entries.iter().map(|e| e.fake.len()).max().unwrap();
+        let fake_entry = result.entries.iter().max_by_key(|e| e.fake.len()).unwrap();
+        let fake_str = String::from_utf8(fake_entry.fake.clone()).unwrap();
+        assert_eq!(
+            fake_str.len(),
+            max_fake_len,
+            "sizing invariant: fake must equal max_fake_len (response.completed)"
+        );
+        let a = fake_str.len() / 3;
+        let b = 2 * fake_str.len() / 3;
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Bytes, io::Error>>();
+        let restore = SseRestoreStream::new(
+            unbounded_receiver_to_stream(rx),
+            result.entries,
+            result.session_key,
+            Provider::OpenAi,
+        );
+
+        tx.send(Ok(responses_text_delta(&fake_str[..a]))).unwrap();
+        tx.send(Ok(responses_text_delta(&fake_str[a..b]))).unwrap();
+        tx.send(Ok(responses_text_delta(&fake_str[b..]))).unwrap();
+        tx.send(Ok(responses_completed())).unwrap();
+        drop(tx);
+
+        let output = collect_all(restore).await;
+
+        assert!(
+            !output.contains(&fake_str),
+            "VC-SSE-18 (response.completed): fake must not appear in output"
+        );
+        let sp = pos(&output, secret_str);
+        let rp = pos(&output, "response.completed");
+        assert!(
+            sp < rp,
+            "VC-SSE-18: secret (pos {sp}) MUST appear before response.completed (pos {rp})"
+        );
+    }
 }
 
 /// VC-SSE-19: a Gemini frame with co-located content + `finishReason` MUST be routed
@@ -656,7 +741,8 @@ async fn vc_sse_19_gemini_colocated_content_is_accumulated() {
         !result.entries.is_empty(),
         "doppel must detect the synthetic key"
     );
-    let fake_str = String::from_utf8(result.entries[0].fake.clone()).unwrap();
+    let fake_entry = result.entries.iter().max_by_key(|e| e.fake.len()).unwrap();
+    let fake_str = String::from_utf8(fake_entry.fake.clone()).unwrap();
     let secret_str = std::str::from_utf8(SECRET).unwrap();
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Bytes, io::Error>>();
@@ -762,6 +848,9 @@ async fn vc_sse_20_gemini_empty_terminal_ordering() {
 
 /// VC-SSE-12 extension: Gemini deferred metadata (`groundingMetadata`) MUST appear
 /// between the restored text flush and the finishReason terminal frame.
+///
+/// Exercises the deferred-metadata drain introduced alongside VC-SSE-20 (Terminal
+/// Event Ordering for Gemini).
 ///
 /// Deleting the `deferred_passthrough.drain(..)` call in the Gemini terminal branch
 /// of `process_one_frame` MUST cause this test to FAIL.

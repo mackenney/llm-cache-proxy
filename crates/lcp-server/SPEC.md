@@ -613,6 +613,11 @@ before the `response.content_part.done` frame. The same ordering constraint
 applies to `response.output_item.done` and `response.completed`: each MUST
 appear after all preceding restored content frames.
 
+**VC-SSE-18b (Responses API error terminal ordering).** Given accumulated content
+remaining in the hold window when any of `response.failed`, `response.cancelled`,
+or `response.incomplete` arrives, the proxy MUST flush all restored content before
+forwarding the error terminal event.
+
 **VC-SSE-19 (Gemini finishReason co-location).** When a Gemini frame carries
 both content parts and a non-null `finishReason`, it MUST be processed as a
 content-accumulation frame (path B). No ordering inversion occurs because
