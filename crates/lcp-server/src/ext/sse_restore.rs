@@ -76,13 +76,13 @@ enum WriteBackInfo {
 
 /// Returns `true` if the first bytes of a response chunk look like an SSE stream.
 ///
-/// Detects `data: `, `event: `, and `: ` (SSE comment) line starters. Anthropic's
+/// Detects `data:`, `event:`, and `: ` (SSE comment) line starters. Anthropic's
 /// real API prefixes each data line with a named `event:` line. OpenRouter prefixes
 /// the stream with a `\`: OPENROUTER PROCESSING` comment before any data lines.
 /// Non-SSE JSON responses begin with `{` or `[`.
 pub fn is_sse_first_chunk(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"data: ")
-        || bytes.starts_with(b"event: ")
+    bytes.starts_with(b"data:")
+        || bytes.starts_with(b"event:")
         || bytes.starts_with(b": ")  // SSE comment line (e.g., OpenRouter)
         || bytes.starts_with(b":\n") // empty SSE comment
 }
@@ -934,6 +934,7 @@ fn process_one_frame(
     let event_type = frame.lines().find_map(|l| {
         l.strip_prefix("event: ")
             .or_else(|| l.strip_prefix("event:"))
+            .filter(|s| !s.is_empty())
     });
     let data_content = frame
         .lines()
@@ -946,9 +947,11 @@ fn process_one_frame(
     };
 
     let Ok(json) = serde_json::from_str::<serde_json::Value>(data_str) else {
-        // "[DONE]" is the Chat Completions stream terminator: complete-flush
-        // all buffers before forwarding (SPEC VC-SSE-17). Other non-JSON data
-        // passes through without a flush.
+        // "[DONE]" is the Chat Completions stream terminator (OpenAI/OpenRouter
+        // only): complete-flush all buffers before forwarding (SPEC VC-SSE-17).
+        // Other non-JSON data passes through without a flush. Anthropic and
+        // Gemini terminate with JSON signals (message_stop, finishReason)
+        // already handled by classify_terminal above.
         if data_str.trim() == "[DONE]"
             && matches!(ctx.provider, Provider::OpenAi | Provider::OpenRouter)
         {
@@ -2120,6 +2123,11 @@ mod tests {
             classify_terminal(&json, None, Provider::Anthropic),
             Some(TerminalScope::Stream)
         ));
+        let json_bad_index = serde_json::json!({"type": "content_block_stop", "index": "bad"});
+        assert!(matches!(
+            classify_terminal(&json_bad_index, None, Provider::Anthropic),
+            Some(TerminalScope::Stream)
+        ));
     }
 
     #[test]
@@ -2340,5 +2348,125 @@ mod tests {
             deferred.is_empty(),
             "deferred queue must be empty after drain"
         );
+    }
+
+    #[test]
+    fn is_sse_detects_spaceless_data_prefix() {
+        assert!(is_sse_first_chunk(b"data:{\"type\":\"ping\"}\n\n"));
+    }
+
+    #[test]
+    fn process_one_frame_data_spaceless_prefix_is_parsed() {
+        // A frame with spaceless "data:{...}" MUST be parsed as normal SSE, not
+        // silently dropped. message_stop is a stream-scope terminal under Anthropic:
+        // flush_all_accumulators (empty) is called, then the frame is forwarded.
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let ctx = SseCtx {
+            entries: &[],
+            session_key: &session_key,
+            provider: Provider::Anthropic,
+            max_fake_len: 0,
+        };
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        let mut deferred: VecDeque<Bytes> = VecDeque::new();
+        process_one_frame(
+            "data:{\"type\":\"message_stop\"}\n\n",
+            &mut accumulators,
+            &ctx,
+            &mut output_queue,
+            &mut deferred,
+        )
+        .unwrap();
+        assert_eq!(
+            output_queue.len(),
+            1,
+            "spaceless data: frame must produce one passthrough frame"
+        );
+        let frame = std::str::from_utf8(&output_queue[0]).unwrap();
+        assert!(
+            frame.contains("message_stop"),
+            "frame must contain parsed content: {frame}"
+        );
+    }
+
+    #[test]
+    fn process_one_frame_done_spaceless_flushes_under_openai() {
+        // A spaceless "data:[DONE]" MUST flush all accumulators under OpenAI,
+        // identical to "data: [DONE]" (with space).
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(FieldKey::OpenAiContent, "held_text".to_owned());
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let ctx = SseCtx {
+            entries: &[],
+            session_key: &session_key,
+            provider: Provider::OpenAi,
+            max_fake_len: 0,
+        };
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        let mut deferred: VecDeque<Bytes> = VecDeque::new();
+        process_one_frame(
+            "data:[DONE]\n\n",
+            &mut accumulators,
+            &ctx,
+            &mut output_queue,
+            &mut deferred,
+        )
+        .unwrap();
+        assert!(
+            accumulators[&FieldKey::OpenAiContent].is_empty(),
+            "accumulator must be flushed by spaceless [DONE]"
+        );
+        assert_eq!(
+            output_queue.len(),
+            2,
+            "expected synthetic frame + [DONE] frame"
+        );
+        let frames: Vec<&str> = output_queue
+            .iter()
+            .map(|b| std::str::from_utf8(b).unwrap())
+            .collect();
+        assert!(
+            frames.iter().any(|f| f.contains("held_text")),
+            "synthetic frame must carry accumulated text"
+        );
+        assert!(
+            frames.iter().any(|f| f.contains("[DONE]")),
+            "[DONE] frame must be present in output"
+        );
+    }
+
+    #[test]
+    fn process_one_frame_done_under_gemini_does_not_flush() {
+        // "[DONE]" under Gemini MUST NOT trigger a flush: Gemini terminates
+        // with finishReason (JSON), not [DONE]. Guard is intentional.
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(
+            FieldKey::GeminiText { thought: false },
+            "held_content".to_owned(),
+        );
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let ctx = SseCtx {
+            entries: &[],
+            session_key: &session_key,
+            provider: Provider::Gemini,
+            max_fake_len: 0,
+        };
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        let mut deferred: VecDeque<Bytes> = VecDeque::new();
+        process_one_frame(
+            "data: [DONE]\n\n",
+            &mut accumulators,
+            &ctx,
+            &mut output_queue,
+            &mut deferred,
+        )
+        .unwrap();
+        assert_eq!(
+            accumulators[&FieldKey::GeminiText { thought: false }],
+            "held_content",
+            "[DONE] under Gemini MUST NOT flush the accumulator"
+        );
+        assert_eq!(output_queue.len(), 1, "[DONE] frame must pass through");
     }
 }

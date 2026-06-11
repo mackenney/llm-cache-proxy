@@ -507,7 +507,11 @@ MUST NOT trigger a flush.
 Live observation: Gemini sends `finishReason` **co-located with content**
 in the same `data:` frame. That frame has extractable content fields, so it
 goes through the content-accumulation path (path B) — not the passthrough
-path (path A) — and no ordering inversion occurs in practice.
+path (path A). However, co-located `finishReason` in a path-B frame (content
++ `finishReason` together) is currently **NOT** forwarded to the client —
+the frame is consumed by path B and synthetic frames contain only the
+restored text content. The `finishReason` signal is lost. This is a known
+gap; see Known Limitations section.
 
 A frame where `candidates[0].finishReason` is non-null AND
 `extract_fields` returns empty (no content parts) constitutes a stream-scope
