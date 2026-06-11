@@ -2,7 +2,7 @@
 //!
 //! Each test encodes one MUST clause from `crates/lcp-server/SPEC.md §Terminal
 //! Event Ordering` as an external behavioral contract. They serve as regression
-//! guards: reverting the step-02 fix to `process_one_frame` causes at least
+//! guards: reverting the terminal-event flush in `process_one_frame` causes at least
 //! `vc_sse_14_anthropic_block_stop_ordering` and
 //! `vc_sse_17_openai_finish_reason_ordering` to FAIL.
 //!
@@ -414,6 +414,51 @@ async fn vc_sse_17_openai_finish_reason_ordering() {
     assert!(
         sp < dp,
         "VC-SSE-17: secret (pos {sp}) MUST appear before [DONE] (pos {dp})"
+    );
+}
+
+/// VC-SSE-17b: `[DONE]` alone (no preceding `finish_reason`) MUST still flush all buffers.
+///
+/// This test sends ONLY `data: [DONE]` with no preceding finish_reason frame.
+/// Deleting the `[DONE]` flush branch in `process_one_frame` MUST cause this test to FAIL.
+#[tokio::test]
+async fn vc_sse_17b_openai_done_only_ordering() {
+    let result = doppel::swap(SECRET, &doppel::patterns::all()).unwrap();
+    assert!(
+        !result.entries.is_empty(),
+        "doppel must detect the synthetic key"
+    );
+    let fake_str = String::from_utf8(result.entries[0].fake.clone()).unwrap();
+    let secret_str = std::str::from_utf8(SECRET).unwrap();
+    let mid = fake_str.len() / 2;
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Bytes, io::Error>>();
+    let restore = SseRestoreStream::new(
+        unbounded_receiver_to_stream(rx),
+        result.entries,
+        result.session_key,
+        Provider::OpenAi,
+    );
+
+    // Pre-load accumulator with a split fake, then send ONLY [DONE] (no finish_reason).
+    tx.send(Ok(openai_tool_call_delta(0, &fake_str[..mid])))
+        .unwrap();
+    tx.send(Ok(openai_tool_call_delta(0, &fake_str[mid..])))
+        .unwrap();
+    tx.send(Ok(openai_done())).unwrap();
+    drop(tx);
+
+    let output = collect_all(restore).await;
+
+    assert!(
+        !output.contains(&fake_str),
+        "VC-SSE-17b: fake must not appear in output"
+    );
+    let sp = pos(&output, secret_str);
+    let dp = pos(&output, "[DONE]");
+    assert!(
+        sp < dp,
+        "VC-SSE-17b: secret (pos {sp}) MUST appear before [DONE] (pos {dp})"
     );
 }
 

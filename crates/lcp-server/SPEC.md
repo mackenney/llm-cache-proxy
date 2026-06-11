@@ -462,6 +462,7 @@ which only emits the prefix that cannot contain a fake boundary.
 | Event (`type` field) | Scope | Buffers flushed |
 |---|---|---|
 | `content_block_stop` (with `index` = N) | Block | All `AnthropicDelta` keys where `index == N` |
+| `content_block_stop` with missing or non-integer `index` | Stream | All (conservative fallback: over-flushing unrelated blocks preserves ordering at the cost of VC-SSE-16 isolation for the malformed stop) |
 | `message_delta` | Stream | All |
 | `message_stop` | Stream | All |
 

@@ -870,6 +870,10 @@ enum TerminalScope {
 /// Returns the flush scope for a terminal SSE event, or `None` for non-terminal events.
 ///
 /// Classification is provider-gated per SPEC.md §Terminal Event Ordering.
+///
+/// MUST only be called for frames where `extract_fields` returned empty. Co-located
+/// content+terminal frames (VC-SSE-19 for Gemini) are handled by path B and MUST NOT
+/// reach this function.
 fn classify_terminal(
     json: &serde_json::Value,
     event_type: Option<&str>,
@@ -909,8 +913,7 @@ fn classify_terminal(
         Provider::Gemini => {
             if json
                 .pointer("/candidates/0/finishReason")
-                .and_then(|v| v.as_str())
-                .is_some()
+                .is_some_and(|v| !v.is_null())
             {
                 Some(TerminalScope::Stream)
             } else {
@@ -928,8 +931,13 @@ fn process_one_frame(
     output_queue: &mut VecDeque<Bytes>,
     deferred_passthrough: &mut VecDeque<Bytes>,
 ) -> io::Result<()> {
-    let event_type = frame.lines().find_map(|l| l.strip_prefix("event: "));
-    let data_content = frame.lines().find_map(|l| l.strip_prefix("data: "));
+    let event_type = frame.lines().find_map(|l| {
+        l.strip_prefix("event: ")
+            .or_else(|| l.strip_prefix("event:"))
+    });
+    let data_content = frame
+        .lines()
+        .find_map(|l| l.strip_prefix("data: ").or_else(|| l.strip_prefix("data:")));
 
     let Some(data_str) = data_content else {
         // No data line (comment / keep-alive): pass through immediately.
@@ -941,7 +949,9 @@ fn process_one_frame(
         // "[DONE]" is the Chat Completions stream terminator: complete-flush
         // all buffers before forwarding (SPEC VC-SSE-17). Other non-JSON data
         // passes through without a flush.
-        if data_str.trim() == "[DONE]" {
+        if data_str.trim() == "[DONE]"
+            && matches!(ctx.provider, Provider::OpenAi | Provider::OpenRouter)
+        {
             flush_all_accumulators(accumulators, ctx.entries, ctx.session_key, output_queue)?;
         }
         output_queue.push_back(Bytes::from(frame.as_bytes().to_vec()));
@@ -1985,6 +1995,60 @@ mod tests {
                 index: 1,
             }],
             "world"
+        );
+    }
+
+    #[test]
+    fn flush_where_block_scope_drains_all_delta_types_at_same_index() {
+        // Two accumulators share index 0 but have different delta_type values.
+        // A Block(0) predicate must drain BOTH, ensuring the `..` wildcard over
+        // delta_type is load-bearing: narrowing it to a single type would leave
+        // the sibling buffer un-flushed, violating VC-SSE-16.
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "text_delta".to_owned(),
+                index: 0,
+            },
+            "hello".to_owned(),
+        );
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "input_json_delta".to_owned(),
+                index: 0,
+            },
+            "world".to_owned(),
+        );
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        flush_accumulators_where(
+            &mut accumulators,
+            |k| matches!(k, FieldKey::AnthropicDelta { index: 0, .. }),
+            &[],
+            &session_key,
+            &mut output_queue,
+        )
+        .unwrap();
+        // Both index-0 buffers drained regardless of delta_type.
+        for accum in accumulators.values() {
+            assert!(accum.is_empty(), "accumulator not empty: {accum:?}");
+        }
+        assert_eq!(
+            output_queue.len(),
+            2,
+            "expected two frames (one per delta_type)"
+        );
+        let frames: Vec<&str> = output_queue
+            .iter()
+            .map(|b| std::str::from_utf8(b).unwrap())
+            .collect();
+        assert!(
+            frames.iter().any(|f| f.contains("hello")),
+            "'hello' frame missing from output"
+        );
+        assert!(
+            frames.iter().any(|f| f.contains("world")),
+            "'world' frame missing from output"
         );
     }
 
