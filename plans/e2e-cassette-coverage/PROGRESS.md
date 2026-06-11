@@ -2,7 +2,7 @@
 
 ## Status
 
-Not started.
+Complete.
 
 ## Objective
 
@@ -35,7 +35,7 @@ committed, and covered forever.
 
 ## Steps
 
-- [ ] [step-01-cassette-infrastructure](./step-01-cassette-infrastructure.md) — cassette TOML format + `MockUpstream::Cassette` + `lcp-record` capture binary
-- [ ] [step-02-recording-sessions](./step-02-recording-sessions.md) — live capture of 30+ scenarios across all providers
-- [ ] [step-03-cassette-tests](./step-03-cassette-tests.md) — integration-tier test for every captured cassette
-- [ ] [step-04-coverage-gaps](./step-04-coverage-gaps.md) — error paths, concurrent, admin API, Gemini metadata gap probe
+- [x] [step-01-cassette-infrastructure](./step-01-cassette-infrastructure.md) — cassette TOML format + `MockUpstream::Cassette` + `lcp-record` capture binary (commit 75e317e)
+- [x] [step-02-recording-sessions](./step-02-recording-sessions.md) — live capture of 34 scenarios across all providers (commit 6bd2c68)
+- [x] [step-03-cassette-tests](./step-03-cassette-tests.md) — integration-tier test for every captured cassette (commit 1377970)
+- [x] [step-04-coverage-gaps](./step-04-coverage-gaps.md) — error paths, concurrent, SSE detection, regression guards (commit 1377970)
