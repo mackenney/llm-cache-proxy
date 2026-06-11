@@ -163,7 +163,7 @@ fn extract_fields(
                             if let Some(text) = json.get("delta").and_then(|v| v.as_str()) {
                                 vec![ExtractedField {
                                     key: FieldKey::ResponsesApiDelta {
-                                        event_type: "output_text".into(),
+                                        event_type: "response.output_text.delta".into(),
                                     },
                                     text: text.to_owned(),
                                 }]
@@ -175,7 +175,7 @@ fn extract_fields(
                             if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
                                 vec![ExtractedField {
                                     key: FieldKey::ResponsesApiDone {
-                                        event_type: "output_text".into(),
+                                        event_type: "response.output_text.done".into(),
                                     },
                                     text: text.to_owned(),
                                 }]
@@ -187,7 +187,7 @@ fn extract_fields(
                             if let Some(text) = json.get("delta").and_then(|v| v.as_str()) {
                                 vec![ExtractedField {
                                     key: FieldKey::ResponsesApiDelta {
-                                        event_type: "reasoning_summary_text".into(),
+                                        event_type: "response.reasoning_summary_text.delta".into(),
                                     },
                                     text: text.to_owned(),
                                 }]
@@ -1739,7 +1739,7 @@ mod tests {
         assert_eq!(
             fields[0].key,
             FieldKey::ResponsesApiDelta {
-                event_type: "output_text".into()
+                event_type: "response.output_text.delta".into()
             }
         );
         assert_eq!(fields[0].text, "Hello world");
@@ -1758,7 +1758,7 @@ mod tests {
         assert_eq!(
             fields[0].key,
             FieldKey::ResponsesApiDone {
-                event_type: "output_text".into()
+                event_type: "response.output_text.done".into()
             }
         );
         assert_eq!(fields[0].text, "Full assembled text here");
@@ -1781,7 +1781,7 @@ mod tests {
         assert_eq!(
             fields[0].key,
             FieldKey::ResponsesApiDelta {
-                event_type: "reasoning_summary_text".into()
+                event_type: "response.reasoning_summary_text.delta".into()
             }
         );
     }
