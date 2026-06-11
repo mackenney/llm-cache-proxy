@@ -948,14 +948,6 @@ fn process_one_frame(
             ctx.session_key,
             output_queue,
         )?;
-        flush_safe_prefix(
-            key,
-            accum,
-            ctx.max_fake_len,
-            ctx.entries,
-            ctx.session_key,
-            output_queue,
-        )?;
     }
 
     Ok(())
@@ -1002,6 +994,25 @@ fn flush_safe_prefix(
     Ok(())
 }
 
+/// Completely flushes (hold window = 0) every accumulation buffer whose
+/// key satisfies `pred`. Used for terminal-event flushes (SPEC.md
+/// §Terminal Event Ordering) and, via flush_all_accumulators, at EOF.
+fn flush_accumulators_where(
+    accumulators: &mut BTreeMap<FieldKey, String>,
+    pred: impl Fn(&FieldKey) -> bool,
+    entries: &[Entry],
+    session_key: &SessionKey,
+    output_queue: &mut VecDeque<Bytes>,
+) -> io::Result<()> {
+    for (key, accum) in accumulators.iter_mut() {
+        if accum.is_empty() || !pred(key) {
+            continue;
+        }
+        flush_safe_prefix(key, accum, 0, entries, session_key, output_queue)?;
+    }
+    Ok(())
+}
+
 /// Flushes all accumulation buffers completely (called at stream EOF).
 fn flush_all_accumulators(
     accumulators: &mut BTreeMap<FieldKey, String>,
@@ -1009,13 +1020,7 @@ fn flush_all_accumulators(
     session_key: &SessionKey,
     output_queue: &mut VecDeque<Bytes>,
 ) -> io::Result<()> {
-    for (key, accum) in accumulators.iter_mut() {
-        if accum.is_empty() {
-            continue;
-        }
-        flush_safe_prefix(key, accum, 0, entries, session_key, output_queue)?;
-    }
-    Ok(())
+    flush_accumulators_where(accumulators, |_| true, entries, session_key, output_queue)
 }
 
 /// Builds a synthetic SSE frame with `text` embedded in the correct JSON path
@@ -1848,5 +1853,94 @@ mod tests {
             v["candidates"][0]["content"]["parts"][0]["functionCall"]["args"]["count"],
             json!(5)
         );
+    }
+    #[test]
+    fn flush_where_only_matching_keys() {
+        // Two accumulators: index 0 and index 1.
+        // Flush with a predicate that matches only index 0.
+        // After the call: index-0 buffer drained into output_queue,
+        // index-1 buffer untouched and absent from output_queue.
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "text_delta".to_owned(),
+                index: 0,
+            },
+            "hello".to_owned(),
+        );
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "input_json_delta".to_owned(),
+                index: 1,
+            },
+            "world".to_owned(),
+        );
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        flush_accumulators_where(
+            &mut accumulators,
+            |k| matches!(k, FieldKey::AnthropicDelta { index: 0, .. }),
+            &[],
+            &session_key,
+            &mut output_queue,
+        )
+        .unwrap();
+        // Index-0 buffer flushed: accumulator is empty, output_queue has one frame.
+        assert!(
+            accumulators[&FieldKey::AnthropicDelta {
+                delta_type: "text_delta".to_owned(),
+                index: 0,
+            }]
+                .is_empty()
+        );
+        assert_eq!(output_queue.len(), 1);
+        let frame = std::str::from_utf8(&output_queue[0]).unwrap();
+        assert!(
+            frame.contains("hello"),
+            "frame should contain 'hello': {frame}"
+        );
+        // Index-1 buffer untouched.
+        assert_eq!(
+            accumulators[&FieldKey::AnthropicDelta {
+                delta_type: "input_json_delta".to_owned(),
+                index: 1,
+            }],
+            "world"
+        );
+    }
+
+    #[test]
+    fn flush_where_true_flushes_all() {
+        // Predicate |_| true must drain every non-empty accumulator.
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "text_delta".to_owned(),
+                index: 0,
+            },
+            "hello".to_owned(),
+        );
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "input_json_delta".to_owned(),
+                index: 1,
+            },
+            "world".to_owned(),
+        );
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        flush_accumulators_where(
+            &mut accumulators,
+            |_| true,
+            &[],
+            &session_key,
+            &mut output_queue,
+        )
+        .unwrap();
+        // Both buffers drained.
+        for accum in accumulators.values() {
+            assert!(accum.is_empty(), "accumulator not empty: {accum:?}");
+        }
+        assert_eq!(output_queue.len(), 2);
     }
 }
