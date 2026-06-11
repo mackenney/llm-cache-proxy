@@ -9,10 +9,6 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 _(none)_
 ## Queued
 
-### SSE terminal-event ordering fix
-
-Fix `SseRestoreStream` forwarding terminal SSE frames (`content_block_stop`, `message_stop`, `[DONE]`, `response.content_part.done`, `response.output_item.done`, …) before flushing held accumulator content, which truncates tool-call arguments downstream whenever doppel holds bytes. Block-scope flush for Anthropic `content_block_stop`, stream-scope complete flush for all other terminals, per SPEC.md §Terminal Event Ordering (VC-SSE-14..20). Plan: [plans/sse-terminal-ordering/](plans/sse-terminal-ordering/PROGRESS.md)
-
 ### System-prompt cache-key normalization
 
 Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, `Current working directory: …`) from the cache key so the same logical prompt gets the same key across days and directories. The forwarded request is never modified — only the bytes fed into BLAKE3 are affected. Configured via `[extensions.system_prompt_normalize]` as a list of regexes matched against the system message body.
@@ -47,6 +43,7 @@ Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, 
 - SSE multi-buffer field coverage: FieldKey/ExtractedField architecture, VC-SSE-1..13 (all providers), 3-round code review, E2E verified vs real APIs — cdf8fc5
 - Body size limit: `--body-limit` / `LCP_BODY_LIMIT` (default 100 MiB, 0 = no limit), `DefaultBodyLimit` on proxy routes, 2 spec invariants + 3 integration tests — 47747de
 - Sliding-window SSE restore: `SseRestoreStream` emits incrementally per-FieldKey (max_fake_len hold), synthetic frames, spec invariant tests — e71a2b5
+- SSE terminal-event ordering fix: block+stream-scope flush before terminal frames; `classify_terminal`, `flush_accumulators_where`; 7 spec invariants + 1 integration regression test (VC-SSE-14..20) — aece11c
 
 ---
 
