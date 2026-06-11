@@ -858,6 +858,68 @@ fn process_sse_chunk(
     Ok(())
 }
 
+/// Scope of a terminal SSE event per SPEC.md §Terminal Event Ordering.
+enum TerminalScope {
+    /// Terminates one Anthropic content block; flush only
+    /// `AnthropicDelta { index == N }` buffers (VC-SSE-16 isolation).
+    Block(u64),
+    /// Terminates the whole response; flush all buffers.
+    Stream,
+}
+
+/// Returns the flush scope for a terminal SSE event, or `None` for non-terminal events.
+///
+/// Classification is provider-gated per SPEC.md §Terminal Event Ordering.
+fn classify_terminal(
+    json: &serde_json::Value,
+    event_type: Option<&str>,
+    provider: Provider,
+) -> Option<TerminalScope> {
+    match provider {
+        Provider::Anthropic => match json["type"].as_str() {
+            Some("content_block_stop") => Some(
+                json["index"]
+                    .as_u64()
+                    .map(TerminalScope::Block)
+                    .unwrap_or(TerminalScope::Stream),
+            ),
+            Some("message_delta") | Some("message_stop") => Some(TerminalScope::Stream),
+            _ => None,
+        },
+        Provider::OpenAi | Provider::OpenRouter => {
+            if let Some(
+                "response.content_part.done"
+                | "response.output_item.done"
+                | "response.completed"
+                | "response.failed"
+                | "response.cancelled"
+                | "response.incomplete",
+            ) = event_type
+            {
+                return Some(TerminalScope::Stream);
+            }
+            if json
+                .pointer("/choices/0/finish_reason")
+                .is_some_and(|v| !v.is_null())
+            {
+                return Some(TerminalScope::Stream);
+            }
+            None
+        }
+        Provider::Gemini => {
+            if json
+                .pointer("/candidates/0/finishReason")
+                .and_then(|v| v.as_str())
+                .is_some()
+            {
+                Some(TerminalScope::Stream)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// Processes one complete SSE frame (ends with `\n\n`).
 fn process_one_frame(
     frame: &str,
@@ -876,14 +938,31 @@ fn process_one_frame(
     };
 
     let Ok(json) = serde_json::from_str::<serde_json::Value>(data_str) else {
-        // Not JSON (e.g. "[DONE]"): pass through immediately.
+        // "[DONE]" is the Chat Completions stream terminator: complete-flush
+        // all buffers before forwarding (SPEC VC-SSE-17). Other non-JSON data
+        // passes through without a flush.
+        if data_str.trim() == "[DONE]" {
+            flush_all_accumulators(accumulators, ctx.entries, ctx.session_key, output_queue)?;
+        }
         output_queue.push_back(Bytes::from(frame.as_bytes().to_vec()));
         return Ok(());
     };
 
     let extracted = extract_fields(&json, ctx.provider, event_type);
     if extracted.is_empty() {
-        // Non-text delta (e.g. message_start): pass through immediately.
+        match classify_terminal(&json, event_type, ctx.provider) {
+            Some(TerminalScope::Block(n)) => flush_accumulators_where(
+                accumulators,
+                |k| matches!(k, FieldKey::AnthropicDelta { index, .. } if *index == n),
+                ctx.entries,
+                ctx.session_key,
+                output_queue,
+            )?,
+            Some(TerminalScope::Stream) => {
+                flush_all_accumulators(accumulators, ctx.entries, ctx.session_key, output_queue)?
+            }
+            None => {}
+        }
         output_queue.push_back(Bytes::from(frame.as_bytes().to_vec()));
         return Ok(());
     }
@@ -1942,5 +2021,201 @@ mod tests {
             assert!(accum.is_empty(), "accumulator not empty: {accum:?}");
         }
         assert_eq!(output_queue.len(), 2);
+    }
+
+    #[test]
+    fn classify_terminal_anthropic_content_block_stop_with_index() {
+        let json0 = serde_json::json!({"type": "content_block_stop", "index": 0});
+        let json3 = serde_json::json!({"type": "content_block_stop", "index": 3});
+        assert!(
+            matches!(
+                classify_terminal(&json0, None, Provider::Anthropic),
+                Some(TerminalScope::Block(0))
+            ),
+            "index 0 should be Block(0)"
+        );
+        assert!(
+            matches!(
+                classify_terminal(&json3, None, Provider::Anthropic),
+                Some(TerminalScope::Block(3))
+            ),
+            "index 3 should be Block(3)"
+        );
+    }
+
+    #[test]
+    fn classify_terminal_anthropic_content_block_stop_missing_index_falls_back_to_stream() {
+        let json = serde_json::json!({"type": "content_block_stop"});
+        assert!(matches!(
+            classify_terminal(&json, None, Provider::Anthropic),
+            Some(TerminalScope::Stream)
+        ));
+    }
+
+    #[test]
+    fn classify_terminal_anthropic_stream_scope_events() {
+        for ty in ["message_delta", "message_stop"] {
+            let json = serde_json::json!({"type": ty});
+            assert!(
+                matches!(
+                    classify_terminal(&json, None, Provider::Anthropic),
+                    Some(TerminalScope::Stream)
+                ),
+                "{ty} should be Stream"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_terminal_anthropic_non_terminal_events_return_none() {
+        for ty in ["ping", "message_start", "content_block_start"] {
+            let json = serde_json::json!({"type": ty});
+            assert!(
+                classify_terminal(&json, None, Provider::Anthropic).is_none(),
+                "{ty} should be None"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_terminal_openai_chat_finish_reason_stream() {
+        let json = serde_json::json!({
+            "choices": [{"delta": {}, "finish_reason": "tool_calls"}]
+        });
+        assert!(matches!(
+            classify_terminal(&json, None, Provider::OpenAi),
+            Some(TerminalScope::Stream)
+        ));
+    }
+
+    #[test]
+    fn classify_terminal_openai_chat_null_finish_reason_is_none() {
+        let json = serde_json::json!({
+            "choices": [{"delta": {"content": "x"}, "finish_reason": null}]
+        });
+        assert!(classify_terminal(&json, None, Provider::OpenAi).is_none());
+    }
+
+    #[test]
+    fn classify_terminal_openai_responses_api_terminal_event_types() {
+        for et in [
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.completed",
+            "response.failed",
+            "response.cancelled",
+            "response.incomplete",
+        ] {
+            let json = serde_json::json!({});
+            assert!(
+                matches!(
+                    classify_terminal(&json, Some(et), Provider::OpenAi),
+                    Some(TerminalScope::Stream)
+                ),
+                "{et} should be Stream"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_terminal_openai_responses_api_non_terminal_event_types() {
+        for et in [
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.content_part.added",
+        ] {
+            let json = serde_json::json!({});
+            assert!(
+                classify_terminal(&json, Some(et), Provider::OpenAi).is_none(),
+                "{et} should be None"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_terminal_openrouter_finish_reason_stream() {
+        let json = serde_json::json!({
+            "choices": [{"delta": {}, "finish_reason": "stop"}]
+        });
+        assert!(matches!(
+            classify_terminal(&json, None, Provider::OpenRouter),
+            Some(TerminalScope::Stream)
+        ));
+    }
+
+    #[test]
+    fn classify_terminal_gemini_with_finish_reason_is_stream() {
+        let json = serde_json::json!({
+            "candidates": [{"finishReason": "STOP"}]
+        });
+        assert!(matches!(
+            classify_terminal(&json, None, Provider::Gemini),
+            Some(TerminalScope::Stream)
+        ));
+    }
+
+    #[test]
+    fn classify_terminal_gemini_without_finish_reason_is_none() {
+        let json = serde_json::json!({
+            "candidates": [{"content": {"parts": [{"text": "hello"}]}}]
+        });
+        assert!(classify_terminal(&json, None, Provider::Gemini).is_none());
+    }
+
+    #[test]
+    fn classify_terminal_cross_provider_guard_anthropic_shape_under_gemini_is_none() {
+        // Anthropic message_stop JSON must not trigger a flush under Gemini.
+        let json = serde_json::json!({"type": "message_stop"});
+        assert!(classify_terminal(&json, None, Provider::Gemini).is_none());
+    }
+
+    #[test]
+    fn process_one_frame_content_block_stop_flushes_accumulator_before_stop_frame() {
+        // Accumulator for AnthropicDelta index 0 holds text "hello".
+        // Feed a content_block_stop index-0 frame.
+        // The synthetic content frame must appear BEFORE the stop frame in output_queue.
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "text_delta".to_owned(),
+                index: 0,
+            },
+            "hello".to_owned(),
+        );
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let ctx = SseCtx {
+            entries: &[],
+            session_key: &session_key,
+            provider: Provider::Anthropic,
+            max_fake_len: 0,
+        };
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        let mut deferred: VecDeque<Bytes> = VecDeque::new();
+        let frame =
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
+        process_one_frame(
+            frame,
+            &mut accumulators,
+            &ctx,
+            &mut output_queue,
+            &mut deferred,
+        )
+        .unwrap();
+        assert_eq!(
+            output_queue.len(),
+            2,
+            "expected synthetic frame + stop frame"
+        );
+        let first = std::str::from_utf8(&output_queue[0]).unwrap();
+        let second = std::str::from_utf8(&output_queue[1]).unwrap();
+        assert!(
+            first.contains("hello"),
+            "first frame should contain accumulator text: {first}"
+        );
+        assert!(
+            second.contains("content_block_stop"),
+            "second frame should be the stop frame: {second}"
+        );
     }
 }
