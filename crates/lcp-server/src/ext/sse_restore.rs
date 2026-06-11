@@ -1054,8 +1054,15 @@ fn process_one_frame(
 
 /// Flushes the safe prefix of one accumulation buffer into `output_queue`.
 ///
-/// Safe prefix length = `accum.len() - max_fake_len`. Bytes within the hold
-/// window may still be part of a fake that spans the current boundary.
+/// The nominal safe length is `accum.len() - max_fake_len`. Before using that
+/// boundary, we scan for any fake whose prefix appears as a suffix of the nominal
+/// safe region. If one is found, the safe boundary is retracted to just before
+/// that partial match, preventing the fake from being split across two restore
+/// calls — which would make neither half match the Aho-Corasick automaton.
+///
+/// During terminal flushes (`max_fake_len == 0`) the entire accumulator is
+/// flushed unconditionally; no partial-match check is needed because the
+/// complete fake must already be present.
 fn flush_safe_prefix(
     key: &FieldKey,
     accum: &mut String,
@@ -1067,7 +1074,29 @@ fn flush_safe_prefix(
     if accum.len() <= max_fake_len {
         return Ok(());
     }
-    let target = accum.len() - max_fake_len;
+    let nominal_target = accum.len() - max_fake_len;
+
+    // During non-terminal flushes, retract the boundary if any fake prefix
+    // appears as a suffix of the nominal safe region. Iterate from the longest
+    // possible match downward so we find the leftmost partial-fake start.
+    let target = if max_fake_len > 0 {
+        let accum_bytes = accum.as_bytes();
+        let mut safe_target = nominal_target;
+        'entries: for entry in entries {
+            let fake = &entry.fake;
+            let max_k = fake.len().saturating_sub(1).min(nominal_target);
+            for k in (1..=max_k).rev() {
+                if accum_bytes[nominal_target - k..nominal_target] == fake[..k] {
+                    safe_target = safe_target.min(nominal_target - k);
+                    continue 'entries;
+                }
+            }
+        }
+        safe_target
+    } else {
+        nominal_target
+    };
+
     // Round down to the nearest char boundary.
     let safe_len = accum[..target]
         .char_indices()
