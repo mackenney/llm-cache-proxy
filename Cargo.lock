@@ -1239,9 +1239,11 @@ dependencies = [
  "lcp-core",
  "lcp-server",
  "reqwest",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "toml",
  "tracing",
 ]
 

@@ -1,0 +1,339 @@
+[[scenario]]
+id = "ant_tool_use_input_json"
+provider = "anthropic"
+secret_kind = "anthropic"
+model = "claude-haiku-4-5"
+upstream = "https://api.anthropic.com"
+path = "/v1/messages"
+method = "POST"
+out = "tests/fixtures/anthropic/tool_use_input_json.toml"
+
+[[scenario]]
+id = "ant_thinking_and_text"
+provider = "anthropic"
+secret_kind = "anthropic"
+model = "claude-haiku-4-5"
+upstream = "https://api.anthropic.com"
+path = "/v1/messages"
+method = "POST"
+out = "tests/fixtures/anthropic/thinking_and_text.toml"
+
+[[scenario]]
+id = "ant_multi_block_stop"
+provider = "anthropic"
+secret_kind = "anthropic"
+model = "claude-haiku-4-5"
+upstream = "https://api.anthropic.com"
+path = "/v1/messages"
+method = "POST"
+out = "tests/fixtures/anthropic/multi_block_stop.toml"
+
+[[scenario]]
+id = "ant_text_only"
+provider = "anthropic"
+secret_kind = "anthropic"
+model = "claude-haiku-4-5"
+upstream = "https://api.anthropic.com"
+path = "/v1/messages"
+method = "POST"
+out = "tests/fixtures/anthropic/text_only.toml"
+
+[[scenario]]
+id = "ant_message_delta_stop"
+provider = "anthropic"
+secret_kind = "anthropic"
+model = "claude-haiku-4-5"
+upstream = "https://api.anthropic.com"
+path = "/v1/messages"
+method = "POST"
+out = "tests/fixtures/anthropic/message_delta_stop.toml"
+
+[[scenario]]
+id = "ant_empty_thinking"
+provider = "anthropic"
+secret_kind = "anthropic"
+model = "claude-haiku-4-5"
+upstream = "https://api.anthropic.com"
+path = "/v1/messages"
+method = "POST"
+out = "tests/fixtures/anthropic/empty_thinking.toml"
+
+[[scenario]]
+id = "ant_error_rate_limit"
+provider = "anthropic"
+secret_kind = "anthropic"
+model = "claude-haiku-4-5"
+upstream = "https://api.anthropic.com"
+path = "/v1/messages"
+method = "POST"
+out = "tests/fixtures/anthropic/error_rate_limit.toml"
+
+[[scenario]]
+id = "ant_error_overloaded"
+provider = "anthropic"
+secret_kind = "anthropic"
+model = "claude-haiku-4-5"
+upstream = "https://api.anthropic.com"
+path = "/v1/messages"
+method = "POST"
+out = "tests/fixtures/anthropic/error_overloaded.toml"
+
+[[scenario]]
+id = "oai_chat_tool_calls"
+provider = "openai"
+secret_kind = "openai_classic"
+model = "gpt-4o-mini"
+upstream = "https://api.openai.com"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openai/chat_tool_calls.toml"
+
+[[scenario]]
+id = "oai_chat_colocated_finish"
+provider = "openai"
+secret_kind = "openai_classic"
+model = "gpt-4o-mini"
+upstream = "https://api.openai.com"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openai/chat_colocated_finish.toml"
+
+[[scenario]]
+id = "oai_chat_content_only"
+provider = "openai"
+secret_kind = "openai_classic"
+model = "gpt-4o-mini"
+upstream = "https://api.openai.com"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openai/chat_content_only.toml"
+
+[[scenario]]
+id = "oai_chat_o4mini_reasoning"
+provider = "openai"
+secret_kind = "openai_classic"
+model = "o4-mini"
+upstream = "https://api.openai.com"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openai/chat_o4mini_reasoning.toml"
+
+[[scenario]]
+id = "oai_chat_multi_tool"
+provider = "openai"
+secret_kind = "openai_classic"
+model = "gpt-4o-mini"
+upstream = "https://api.openai.com"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openai/chat_multi_tool.toml"
+
+[[scenario]]
+id = "oai_chat_stream_error"
+provider = "openai"
+secret_kind = "openai_classic"
+model = "gpt-4o-mini"
+upstream = "https://api.openai.com"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openai/chat_stream_error.toml"
+
+[[scenario]]
+id = "oai_chat_finish_stop"
+provider = "openai"
+secret_kind = "openai_classic"
+model = "gpt-4o-mini"
+upstream = "https://api.openai.com"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openai/chat_finish_stop.toml"
+
+[[scenario]]
+id = "oai_resp_text_delta"
+provider = "openai"
+secret_kind = "openai_classic"
+model = "gpt-4o-mini"
+upstream = "https://api.openai.com"
+path = "/v1/responses"
+method = "POST"
+out = "tests/fixtures/openai/resp_text_delta.toml"
+
+[[scenario]]
+id = "oai_resp_done_sequence"
+provider = "openai"
+secret_kind = "openai_classic"
+model = "gpt-4o-mini"
+upstream = "https://api.openai.com"
+path = "/v1/responses"
+method = "POST"
+out = "tests/fixtures/openai/resp_done_sequence.toml"
+
+[[scenario]]
+id = "oai_resp_error_incomplete"
+provider = "openai"
+secret_kind = "openai_classic"
+model = "gpt-4o-mini"
+upstream = "https://api.openai.com"
+path = "/v1/responses"
+method = "POST"
+out = "tests/fixtures/openai/resp_error_incomplete.toml"
+
+[[scenario]]
+id = "oai_resp_output_text_done_body"
+provider = "openai"
+secret_kind = "openai_classic"
+model = "gpt-4o-mini"
+upstream = "https://api.openai.com"
+path = "/v1/responses"
+method = "POST"
+out = "tests/fixtures/openai/resp_output_text_done_body.toml"
+
+[[scenario]]
+id = "oai_resp_completed_body"
+provider = "openai"
+secret_kind = "openai_classic"
+model = "gpt-4o-mini"
+upstream = "https://api.openai.com"
+path = "/v1/responses"
+method = "POST"
+out = "tests/fixtures/openai/resp_completed_body.toml"
+
+[[scenario]]
+id = "or_claude_tool_use"
+provider = "openrouter"
+secret_kind = "openai_classic"
+model = "anthropic/claude-haiku-4-5"
+upstream = "https://openrouter.ai/api"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openrouter/claude_tool_use.toml"
+
+[[scenario]]
+id = "or_claude_finish_colocated"
+provider = "openrouter"
+secret_kind = "openai_classic"
+model = "anthropic/claude-haiku-4-5"
+upstream = "https://openrouter.ai/api"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openrouter/claude_finish_colocated.toml"
+
+[[scenario]]
+id = "or_claude_text"
+provider = "openrouter"
+secret_kind = "openai_classic"
+model = "anthropic/claude-haiku-4-5"
+upstream = "https://openrouter.ai/api"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openrouter/claude_text.toml"
+
+[[scenario]]
+id = "or_deepseek_chat"
+provider = "openrouter"
+secret_kind = "openai_classic"
+model = "deepseek/deepseek-chat"
+upstream = "https://openrouter.ai/api"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openrouter/deepseek_chat.toml"
+
+[[scenario]]
+id = "or_deepseek_r1_reasoning"
+provider = "openrouter"
+secret_kind = "openai_classic"
+model = "deepseek/deepseek-r1"
+upstream = "https://openrouter.ai/api"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openrouter/deepseek_r1_reasoning.toml"
+
+[[scenario]]
+id = "or_processing_prefix"
+provider = "openrouter"
+secret_kind = "openai_classic"
+model = "anthropic/claude-haiku-4-5"
+upstream = "https://openrouter.ai/api"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openrouter/processing_prefix.toml"
+
+[[scenario]]
+id = "or_o4mini_tool"
+provider = "openrouter"
+secret_kind = "openai_classic"
+model = "openai/o4-mini"
+upstream = "https://openrouter.ai/api"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openrouter/o4mini_tool.toml"
+
+[[scenario]]
+id = "or_error_no_credits"
+provider = "openrouter"
+secret_kind = "openai_classic"
+model = "anthropic/claude-haiku-4-5"
+upstream = "https://openrouter.ai/api"
+path = "/v1/chat/completions"
+method = "POST"
+out = "tests/fixtures/openrouter/error_no_credits.toml"
+
+[[scenario]]
+id = "gem_tool_call"
+provider = "gemini"
+secret_kind = "gemini"
+model = "gemini-2.0-flash"
+upstream = "https://generativelanguage.googleapis.com"
+path = "/v1beta/models/gemini-2.0-flash:streamGenerateContent"
+method = "POST"
+out = "tests/fixtures/gemini/tool_call.toml"
+
+[[scenario]]
+id = "gem_multi_part_thinking"
+provider = "gemini"
+secret_kind = "gemini"
+model = "gemini-2.0-flash"
+upstream = "https://generativelanguage.googleapis.com"
+path = "/v1beta/models/gemini-2.0-flash:streamGenerateContent"
+method = "POST"
+out = "tests/fixtures/gemini/multi_part_thinking.toml"
+
+[[scenario]]
+id = "gem_colocated_finish"
+provider = "gemini"
+secret_kind = "gemini"
+model = "gemini-2.0-flash"
+upstream = "https://generativelanguage.googleapis.com"
+path = "/v1beta/models/gemini-2.0-flash:streamGenerateContent"
+method = "POST"
+out = "tests/fixtures/gemini/colocated_finish.toml"
+
+[[scenario]]
+id = "gem_text_only"
+provider = "gemini"
+secret_kind = "gemini"
+model = "gemini-2.0-flash"
+upstream = "https://generativelanguage.googleapis.com"
+path = "/v1beta/models/gemini-2.0-flash:streamGenerateContent"
+method = "POST"
+out = "tests/fixtures/gemini/text_only.toml"
+
+[[scenario]]
+id = "gem_usage_metadata"
+provider = "gemini"
+secret_kind = "gemini"
+model = "gemini-2.0-flash"
+upstream = "https://generativelanguage.googleapis.com"
+path = "/v1beta/models/gemini-2.0-flash:streamGenerateContent"
+method = "POST"
+out = "tests/fixtures/gemini/usage_metadata.toml"
+
+[[scenario]]
+id = "gem_error_quota"
+provider = "gemini"
+secret_kind = "gemini"
+model = "gemini-2.0-flash"
+upstream = "https://generativelanguage.googleapis.com"
+path = "/v1beta/models/gemini-2.0-flash:streamGenerateContent"
+method = "POST"
+out = "tests/fixtures/gemini/error_quota.toml"

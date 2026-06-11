@@ -6,13 +6,11 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 
 ## In Progress
 
-_(none)_
-## Queued
-
 ### E2E cassette coverage
 
 Build a cassette-based integration test tier: capture real provider responses once, commit as TOML fixtures, replay deterministically in CI. Covers real wire formats (co-located finish_reason, spaceless SSE, DeepSeek R1 reasoning field, Gemini finishReason loss, Responses API event sequencing). 34 cassettes × 4 providers + error/concurrent/admin/known-gap tests. Plan: [plans/e2e-cassette-coverage/](plans/e2e-cassette-coverage/PROGRESS.md)
 
+## Queued
 ### System-prompt cache-key normalization
 
 Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, `Current working directory: …`) from the cache key so the same logical prompt gets the same key across days and directories. The forwarded request is never modified — only the bytes fed into BLAKE3 are affected. Configured via `[extensions.system_prompt_normalize]` as a list of regexes matched against the system message body.

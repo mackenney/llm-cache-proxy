@@ -18,6 +18,8 @@ futures-util = { workspace = true }
 axum = { workspace = true }
 bytes = { workspace = true }
 tracing = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true }
 flate2 = "1"
 assert_cmd = "2"
 tempfile = "3"

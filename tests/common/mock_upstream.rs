@@ -43,6 +43,14 @@ pub enum MockResponse {
     /// Never responds — sleeps indefinitely to simulate a hung upstream.
     /// Use with a short proxy timeout to test gateway timeout behavior.
     Hang,
+    /// Stream a pre-recorded cassette. Each chunk is one upstream write.
+    /// For SSE cassettes, chunks are complete SSE frames. The `headers` field
+    /// carries the content-type and any other response headers to include.
+    Recorded {
+        status: u16,
+        headers: Vec<(String, String)>,
+        chunks: Vec<Bytes>,
+    },
 }
 
 struct Inner {
@@ -180,6 +188,15 @@ impl MockUpstreamBuilder {
         self.response(MockResponse::Hang)
     }
 
+    /// Queue a cassette as the next response.
+    pub fn cassette(self, c: &super::cassette::Cassette) -> Self {
+        self.response(MockResponse::Recorded {
+            status: c.status,
+            headers: c.headers.clone(),
+            chunks: c.body_chunks.clone(),
+        })
+    }
+
     /// Build and start the mock server.
     pub async fn build(self) -> MockUpstream {
         MockUpstream::start(self.responses).await
@@ -235,6 +252,20 @@ async fn handle_request(
         MockResponse::Hang => {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
             StatusCode::OK.into_response()
+        }
+        MockResponse::Recorded {
+            status,
+            headers,
+            chunks,
+        } => {
+            let stream = futures_util::stream::iter(
+                chunks.into_iter().map(Ok::<_, std::convert::Infallible>),
+            );
+            let mut builder = Response::builder().status(status);
+            for (k, v) in &headers {
+                builder = builder.header(k.as_str(), v.as_str());
+            }
+            builder.body(Body::from_stream(stream)).unwrap()
         }
     }
 }
