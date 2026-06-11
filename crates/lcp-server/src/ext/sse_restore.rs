@@ -208,10 +208,14 @@ fn extract_fields(
             let mut fields = Vec::new();
 
             if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
-                fields.push(ExtractedField {
-                    key: FieldKey::OpenAiContent,
-                    text: text.to_owned(),
-                });
+                // Skip empty-string content: it carries no secret and must not prevent
+                // classify_terminal from running for co-located finish_reason frames.
+                if !text.is_empty() {
+                    fields.push(ExtractedField {
+                        key: FieldKey::OpenAiContent,
+                        text: text.to_owned(),
+                    });
+                }
             }
 
             if let Some(text) = delta.get("reasoning_content").and_then(|v| v.as_str()) {

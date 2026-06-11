@@ -1018,3 +1018,61 @@ async fn vc_sse_18b_responses_api_error_terminal_ordering() {
         );
     }
 }
+
+/// VC-SSE-17e: OpenRouter/OpenAI finish_reason frames with `"content":""` (empty string)
+/// MUST route to path A (classify_terminal) and flush all buffers before forwarding.
+///
+/// Real OpenRouter upstreams co-locate `"content":""` with `"finish_reason":"stop"` in the
+/// final Chat Completions chunk. If extract_fields treats the empty content as extractable,
+/// the frame routes to path B and classify_terminal is never called — the terminal flush
+/// does not fire and held content is never restored.
+#[tokio::test]
+async fn vc_sse_17e_openrouter_empty_content_finish_reason_ordering() {
+    let result = doppel::swap(SECRET, &doppel::patterns::all()).unwrap();
+    assert!(
+        !result.entries.is_empty(),
+        "doppel must detect the synthetic key"
+    );
+    let max_fake_len = result.entries.iter().map(|e| e.fake.len()).max().unwrap();
+    let fake_entry = result.entries.iter().max_by_key(|e| e.fake.len()).unwrap();
+    let fake_str = String::from_utf8(fake_entry.fake.clone()).unwrap();
+    assert_eq!(fake_str.len(), max_fake_len, "sizing invariant");
+    let secret_str = std::str::from_utf8(SECRET).unwrap();
+    let mid = fake_str.len() / 2;
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<Bytes, io::Error>>();
+    let restore = SseRestoreStream::new(
+        unbounded_receiver_to_stream(rx),
+        result.entries,
+        result.session_key,
+        Provider::OpenRouter,
+    );
+
+    // Feed tool-call deltas carrying the fake key
+    tx.send(Ok(openai_tool_call_delta(0, &fake_str[..mid])))
+        .unwrap();
+    tx.send(Ok(openai_tool_call_delta(0, &fake_str[mid..])))
+        .unwrap();
+
+    // Final chunk: co-located empty content + non-null finish_reason (real OpenRouter wire format).
+    // The empty content MUST NOT prevent classify_terminal from running.
+    let finish_frame = Bytes::from(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n",
+    );
+    tx.send(Ok(finish_frame)).unwrap();
+    tx.send(Ok(openai_done())).unwrap();
+    drop(tx);
+
+    let output = collect_all(restore).await;
+
+    assert!(
+        !output.contains(&fake_str),
+        "VC-SSE-17e: fake must not appear in output"
+    );
+    let sp = pos(&output, secret_str);
+    let fp = pos(&output, "\"finish_reason\":");
+    assert!(
+        sp < fp,
+        "VC-SSE-17e: secret (pos {sp}) MUST appear before finish_reason (pos {fp})"
+    );
+}
