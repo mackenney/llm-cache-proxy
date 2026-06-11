@@ -44,6 +44,7 @@ Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, 
 - Body size limit: `--body-limit` / `LCP_BODY_LIMIT` (default 100 MiB, 0 = no limit), `DefaultBodyLimit` on proxy routes, 2 spec invariants + 3 integration tests — 47747de
 - Sliding-window SSE restore: `SseRestoreStream` emits incrementally per-FieldKey (max_fake_len hold), synthetic frames, spec invariant tests — e71a2b5
 - SSE terminal-event ordering fix: block+stream-scope flush before terminal frames; `classify_terminal`, `flush_accumulators_where`; 7 spec invariants + 1 integration regression test (VC-SSE-14..20) — aece11c
+- 5-round code review + E2E fixes: `is_sse_first_chunk` spaceless detection, Gemini deferred drain before terminal, `flush_safe_prefix` split-fake bug, synthetic Responses API event type names, empty-content finish_reason routing; 253 tests, all providers verified — 0bc6827
 
 ---
 
