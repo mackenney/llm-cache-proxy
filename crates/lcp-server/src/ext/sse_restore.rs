@@ -969,7 +969,13 @@ fn process_one_frame(
                 output_queue,
             )?,
             Some(TerminalScope::Stream) => {
-                flush_all_accumulators(accumulators, ctx.entries, ctx.session_key, output_queue)?
+                flush_all_accumulators(accumulators, ctx.entries, ctx.session_key, output_queue)?;
+                // Drain Gemini deferred pass-through (non-text metadata) before the
+                // terminal frame so clients that finalize on finishReason see tool
+                // args first (SPEC VC-SSE-12, VC-SSE-11).
+                if ctx.provider == Provider::Gemini {
+                    output_queue.extend(deferred_passthrough.drain(..));
+                }
             }
             None => {}
         }
@@ -2280,6 +2286,59 @@ mod tests {
         assert!(
             second.contains("content_block_stop"),
             "second frame should be the stop frame: {second}"
+        );
+    }
+
+    #[test]
+    fn gemini_deferred_passthrough_drains_before_finish_reason_frame() {
+        // Accumulator holds Gemini text "hello"; deferred queue holds one
+        // non-text frame (e.g. grounding metadata).  Feeding a finishReason
+        // frame must produce: [text flush] [deferred] [finishReason], in that
+        // order, so clients that finalize on finishReason receive tool args.
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(FieldKey::GeminiText { thought: false }, "hello".to_owned());
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let ctx = SseCtx {
+            entries: &[],
+            session_key: &session_key,
+            provider: Provider::Gemini,
+            max_fake_len: 0,
+        };
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        let mut deferred: VecDeque<Bytes> = VecDeque::new();
+        deferred.push_back(Bytes::from_static(b"data: {\"groundingMetadata\":{}}\n\n"));
+        let frame = "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n";
+        process_one_frame(
+            frame,
+            &mut accumulators,
+            &ctx,
+            &mut output_queue,
+            &mut deferred,
+        )
+        .unwrap();
+        assert_eq!(
+            output_queue.len(),
+            3,
+            "expected text flush + deferred + finishReason"
+        );
+        let first = std::str::from_utf8(&output_queue[0]).unwrap();
+        let second = std::str::from_utf8(&output_queue[1]).unwrap();
+        let third = std::str::from_utf8(&output_queue[2]).unwrap();
+        assert!(
+            first.contains("hello"),
+            "first frame must be text flush: {first}"
+        );
+        assert!(
+            second.contains("groundingMetadata"),
+            "second frame must be deferred metadata: {second}"
+        );
+        assert!(
+            third.contains("finishReason"),
+            "third frame must be the finishReason terminal: {third}"
+        );
+        assert!(
+            deferred.is_empty(),
+            "deferred queue must be empty after drain"
         );
     }
 }
