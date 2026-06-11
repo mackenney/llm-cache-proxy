@@ -17,4 +17,5 @@ mod model_extraction;
 mod normalization;
 mod routing;
 mod sse_restore_streaming;
+mod sse_terminal_ordering;
 mod tracing;
