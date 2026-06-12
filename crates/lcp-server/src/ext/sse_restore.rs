@@ -1101,12 +1101,15 @@ fn flush_safe_prefix(
         nominal_target
     };
 
-    // Round down to the nearest char boundary.
-    let safe_len = accum[..target]
-        .char_indices()
-        .last()
-        .map(|(i, c)| i + c.len_utf8())
-        .unwrap_or(0);
+    // target is a byte offset derived from fake key lengths and can fall inside a
+    // multibyte codepoint. Walk back to the nearest char boundary (largest index
+    // <= target that starts a char). floor_char_boundary would be idiomatic here
+    // but requires Rust 1.91; MSRV is 1.85.
+    let mut target = target;
+    while target > 0 && !accum.is_char_boundary(target) {
+        target -= 1;
+    }
+    let safe_len = target;
     if safe_len == 0 {
         return Ok(());
     }
@@ -2536,5 +2539,126 @@ mod tests {
             "spaceless [DONE] under Gemini MUST NOT flush the accumulator"
         );
         assert_eq!(output_queue.len(), 1, "[DONE] frame must pass through");
+    }
+}
+
+#[cfg(test)]
+mod flush_safe_prefix_char_boundary_tests {
+    //! Regression tests for the panic in `flush_safe_prefix` when the byte
+    //! offset `target` (derived from fake key lengths) falls inside a
+    //! multibyte UTF-8 codepoint.
+    //!
+    //! Trigger conditions:
+    //!   nominal_target = accum.len() - max_fake_len
+    //! If a multibyte char (emoji=4 bytes, CJK=3 bytes, Greek=2 bytes) straddles
+    //! that boundary, `accum[..target]` panics with
+    //! "end byte index N is not a char boundary".
+    use super::*;
+    use bytes::Bytes;
+    use doppel::patterns;
+    use futures_util::StreamExt;
+    use std::io;
+
+    // Real Anthropic key that matches the structural pattern.
+    // NOT a live credential.
+    const ANT: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    /// Swap ANT through the doppel detector, return (entries, session_key, fake_len).
+    fn swap_ant() -> (Vec<doppel::Entry>, doppel::SessionKey, usize) {
+        let detector = doppel::Detector::new(vec![patterns::anthropic()]);
+        let body = [b"key: ".as_slice(), ANT].concat();
+        let result = detector.swap(&body).unwrap();
+        let fake_len = result.entries[0].fake.len();
+        (result.entries, result.session_key, fake_len)
+    }
+
+    /// Build an Anthropic SSE stream where a single text_delta accumulates
+    /// `text`, followed by message_stop.
+    fn anthropic_sse(text: &str) -> ResponseStream {
+        use futures_util::stream;
+        let event = format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":{}}}}}",
+            serde_json::to_string(text).unwrap()
+        );
+        let stop = "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_owned();
+        let full = format!("{}\n\n{}", event, stop);
+        Box::pin(stream::once(async move {
+            Ok::<Bytes, io::Error>(Bytes::from(full.into_bytes()))
+        }))
+    }
+
+    /// Collect a `SseRestoreStream` to bytes, panic-propagating any errors.
+    async fn collect(s: SseRestoreStream) -> Vec<u8> {
+        s.collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|r| r.unwrap())
+            .flat_map(|b| b.to_vec())
+            .collect()
+    }
+
+    /// nominal_target falls at byte offset 2 inside a 4-byte emoji (🚀 = F0 9F 9A 80).
+    /// Layout: "A" * p + "🚀" + "B" * suffix
+    ///   accum byte-len  = p + 4 + suffix
+    ///   nominal_target  = p + 4 + suffix - fake_len
+    /// Choose p and suffix so nominal_target = p + 2 (inside 🚀).
+    ///   => p + 4 + suffix - fake_len = p + 2
+    ///   => suffix = fake_len - 2
+    #[tokio::test]
+    async fn no_panic_emoji_at_nominal_target() {
+        let (entries, session_key, fake_len) = swap_ant();
+        // Need suffix >= 0, so fake_len >= 2 (always true for Anthropic keys ~100 bytes).
+        assert!(fake_len >= 2, "fake key too short for this test");
+        let p = 10usize;
+        let suffix = fake_len - 2;
+        let text = format!("{}{}{}", "A".repeat(p), "🚀", "B".repeat(suffix));
+        let stream = anthropic_sse(&text);
+        // Before the fix this panics; after the fix it must complete.
+        let _out = collect(SseRestoreStream::new(
+            stream,
+            entries,
+            session_key,
+            Provider::Anthropic,
+        ))
+        .await;
+    }
+
+    /// nominal_target falls at byte offset 1 inside a 3-byte CJK character (好 = E5 A5 BD).
+    /// Layout: "A" * p + "好" + "B" * suffix
+    ///   nominal_target = p + 1 (inside 好)
+    ///   => p + 3 + suffix - fake_len = p + 1  =>  suffix = fake_len - 2
+    #[tokio::test]
+    async fn no_panic_cjk_at_nominal_target() {
+        let (entries, session_key, fake_len) = swap_ant();
+        assert!(fake_len >= 2);
+        let p = 5usize;
+        let suffix = fake_len - 2;
+        let text = format!("{}{}{}", "A".repeat(p), "好", "B".repeat(suffix));
+        let stream = anthropic_sse(&text);
+        let _out = collect(SseRestoreStream::new(
+            stream,
+            entries,
+            session_key,
+            Provider::Anthropic,
+        ))
+        .await;
+    }
+
+    /// nominal_target falls at byte offset 1 inside a 2-byte Greek codepoint (α = CE B1).
+    #[tokio::test]
+    async fn no_panic_greek_at_nominal_target() {
+        let (entries, session_key, fake_len) = swap_ant();
+        assert!(fake_len >= 1);
+        let p = 3usize;
+        let suffix = fake_len - 1;
+        let text = format!("{}{}{}", "A".repeat(p), "α", "B".repeat(suffix));
+        let stream = anthropic_sse(&text);
+        let _out = collect(SseRestoreStream::new(
+            stream,
+            entries,
+            session_key,
+            Provider::Anthropic,
+        ))
+        .await;
     }
 }
