@@ -11,6 +11,7 @@ use lcp_server::{DoppelExt, ExtensionPipeline, ServerConfig, serve};
 
 #[derive(Parser, Debug)]
 #[command(
+    version,
     name = "lcp",
     about = "Local HTTP proxy that caches LLM API calls (default: http://127.0.0.1:9001, see --host/--port).",
     long_about = "lcp is a local HTTP proxy that caches LLM API responses on disk and replays them on subsequent identical requests, eliminating redundant API spend during iterative development.\n\nPoint your LLM client at lcp instead of the real API:\n  ANTHROPIC_BASE_URL=http://127.0.0.1:9001/anthropic\n  OPENAI_BASE_URL=http://127.0.0.1:9001/openai\n  OPENROUTER_BASE_URL=http://127.0.0.1:9001/openrouter\n  GEMINI_BASE_URL=http://127.0.0.1:9001/gemini\n\nReplace 127.0.0.1:9001 with whatever --host/--port you configure.\n\nFirst call goes to the real API and is cached. Subsequent identical calls are served from disk at full speed. Send x-lcp-bypass: 1 to skip the cache for a request.\n\nTag any request with x-lcp-trace: <id> to group it into a named trace session. Retrieve the full exchange log later with GET /trace/<id>.\n\nSecret protection (doppel extension):\n  lcp can swap secrets in requests with fakes before they are forwarded and cached.\n  Enable via --doppel-secrets-file or config:\n    [extensions.doppel]\n    secrets_file = \"~/.config/lcp/secrets.toml\"\n  Set up with: doppel init --patterns ~/.config/lcp/secrets.toml"
@@ -332,6 +333,8 @@ async fn run(cli: Cli, file_config: Option<FileConfig>) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("lcp=info".parse()?))
         .init();
+
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting");
 
     let db_path = cli
         .db

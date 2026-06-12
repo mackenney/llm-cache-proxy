@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--version` / `-V` flag**: clap now exposes the binary version; the
+  version is also logged at `INFO` level on startup.
 - **Cassette integration test tier** (`tests/integration/`): 34 recorded
   fixtures spanning all four providers (Anthropic, OpenAI, OpenRouter,
   Gemini) exercise cache hit/miss, SSE passthrough, error responses,
