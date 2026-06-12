@@ -6,6 +6,11 @@
 mod common;
 
 mod body_limit;
+mod cassette_infrastructure;
+mod cassettes;
+mod concurrent;
 mod doppel;
+mod errors;
+mod sse_detection;
 mod timeout;
 mod ttl;

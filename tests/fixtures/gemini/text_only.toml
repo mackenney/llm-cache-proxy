@@ -1,0 +1,35 @@
+schema = 1
+provider = "gemini"
+scenario = "gem_text_only"
+model = "gemini-2.5-flash"
+recorded_at = "2026-06-11"
+secret_kind = "gemini"
+
+[request]
+method = "POST"
+path = "/v1beta/models/gemini-2.5-flash:streamGenerateContent"
+content_type = "application/json"
+body = """
+{
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "Repeat: AIza7ciOdcWvIygdjjiM4Rqs80yKKt6j7GZo_hB"
+        }
+      ]
+    }
+  ]
+}
+"""
+
+[[response]]
+status = 200
+
+body_chunks = [
+  "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"AIza7ciOdcWvIygdjjiM4Rqs80yKKt6j7GZo_hB\"}],\"role\": \"model\"},\"finishReason\": \"STOP\",\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 32,\"candidatesTokenCount\": 29,\"totalTokenCount\": 86,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 32}],\"thoughtsTokenCount\": 25,\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-2.5-flash\",\"responseId\": \"YjorasH_Cr2kqtsPuvHZ6Q8\"}\r\n\r\n",
+]
+[response.headers]
+content-type = "text/event-stream"
+

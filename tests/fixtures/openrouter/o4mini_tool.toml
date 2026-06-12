@@ -1,0 +1,64 @@
+schema = 1
+provider = "openrouter"
+scenario = "or_o4mini_tool"
+model = "openai/o4-mini"
+recorded_at = "2026-06-11"
+secret_kind = "openai_classic"
+
+[request]
+method = "POST"
+path = "/v1/chat/completions"
+content_type = "application/json"
+body = """
+{
+  "model": "openai/o4-mini",
+  "max_tokens": 200,
+  "stream": true,
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "store_key",
+        "description": "Store a key.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "key"
+          ]
+        }
+      }
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Call store_key with key: sk-t43lmkJkWEbF8ILfObOkOuX3W5XoQOmHh3pWWZ0093e0xugP"
+    }
+  ]
+}
+"""
+
+[[response]]
+status = 200
+
+body_chunks = [
+  ": OPENROUTER PROCESSING\n\n",
+  ": OPENROUTER PROCESSING\n\n",
+  ": OPENROUTER PROCESSING\n\n",
+  ": OPENROUTER PROCESSING\n\n",
+  ": OPENROUTER PROCESSING\n\n",
+  "data: {\"id\":\"gen-1781217767-p4PfHJuwCl2PJ6bCtoe9\",\"object\":\"chat.completion.chunk\",\"created\":1781217767,\"model\":\"openai/o4-mini-2025-04-16\",\"provider\":\"OpenAI\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\",\"role\":\"assistant\",\"reasoning\":null,\"reasoning_details\":[{\"type\":\"reasoning.encrypted\",\"data\":\"gAAAAABqKznpZwE17p8ctOwMoMwuWUGQuDvNNMtjOWCzDdM1t5lxI7Rag2RHfiJGQFvF_Hn_Z4phcfbK0w8ploV5mLVXRfBj0u6eSvs75BebwGUWaUIsMjsttuFv9Rv8tZbUC23lx3Vjl22efuyS3p2QclaugW6hVzry2bEoB3Gav4Nybd2ToWzifN1LM4LuX6URvV6k__LZV7y00xgH4hpvleIdPPeI9jwHtnY5hnfkgmAcGjsgZgsCIjSqX7-W41F78tNhkqD8IC0v45f2Udd8t2XuPySgtSCNYLfaOIn4R2hd_ldg9sxcIAIG_oCyneqE2BRlt8DF99zHozuWg0iC6D4E32hjeiFyp-VngtWB6Qkmt6wkRO2FPQNNlCJGnPBr5wRmNwYMXkT9rzjN7zPkKydlviBM_w8Ycsmc0HaWHC5bMcWlVsWfRa0c-UeIAOogWVF0FiuN4hLfyDCJvvjtUdVAZlufmXWwIbDlHS0bBslFejPDWHUHkhb54BIuVcXRO1IYqqKxStEr_q6aniyRdgYIQKwwcxDgPdLM2riQxwjB3xg16FFU87kI7UaF6iHtoUytjm0LurDeZ1MKXhDqp4glhlSXe9Y54RDLUNt7YyrBFKgvcsT1aTnqgqiLfaae2ke_SkPOrc2DH0KnvRrlOuHAyr_QFh8NLLindhIA57ZgIbEq5x5PE8jkTVUBJDNL0X2h1I4uqj4kBGxzBxi74-qxSoYFQhuVh52O7zWAB_39wlc7qFVcDkNDAVBjhzbWhRz-gep2WiOLAIjd7Qv8_mYU7F4_EpbME9aITuHSQcnz_hcj4SHWnleWX06mS2S6zHdPDSc0xZMnEjF3fPIyHdN9As6Gb7c6Z0-yTGfBO_vQevTKWSWRba0QC2Aqmdq1bMFCwZXlGNYm5yAkb6976JNEJhE9KYiF2tS4mG62f-45o8TaPmhVlXGN_0XexN3RKBOwjfgmwaCe0HTwwmHQyyrGPEs6zfGDAd8tmhCmXBuidPRjzCcS7g9gODSmnC5x1hMV3SjyKx7hcY6T25axiXXm1SWzZSCARn51R",
+  "_1RN4ZNeJcfC20F4B4HfYIgp7v4aU_lmOwQpgv1KHshCghL4osGsBdHgKKvIXD22EGxzAaWrn_Z0Px5kaGjURqdXJiWAAwSv60pxEOqR1DN6StleJjIwK7R8xn4W4aef8jZ94PSlkarHOuWDXtlrLtxKNZlLdc9VRCJ41alCr4FyJy892ZFQGTlA4keIwzKjolaq1RGwoNQCa3rZnLvpsLkRTHdnUoXPY6cPlEMBiI0X8ue1ECKDq2XtpPYDsx6tCf6W4ffFbJjcNeCnEXLpZIQLPE9dj3aih1cZS-bmxFliJOFGSTRfVwietN-Xcs6ThJFAf2jUvL0TVYAXRqhFLi-R5hije9QXRkty6OPAVRL8TfXl-Hrrql6HuQiv9CsXNr51dk0L9xaqgAf0-tFFqVG7zs5puxiUfnxcQFPrpHN_jfuLuiaWSCv-q3RAVojQ3fhudYHJrfBeKR5kXaYGvpMBICC152hspO5wf_2LzWQz9d8tpQZ9YECSuQFNzBVke_VIBPJ2UjU8VT06TkFndM9Zw5OzjGGVcLz2PTNjCIM0RpAu30-Ri1ZJhRNI0v8ZSsu97TUjtJFRZatavvmOpLaRdxQrG4MHl-81LUpe_qijsFgO4_shkHL0W5LL3UQojdDaH7zMBTCV9G9gQRhLpQrIQqGW2aOUFSqnVO_Kaq8zOi8wAMiZtR_2MJTaT4bnRgEvH5O4k_lzSY_kKLvP2eHaWtlgKPntnQCObESZQeEXHlMGD9hsHl6mPmPQVomydyUHhZZDaWLol76UK9xbVNMgALdj23SxMn6AgHCd30t4a6T6ukqMnas4eCfXqPIpdSPxBAy7Nx0PZMKUnTqiDGcM7-IjW64qhgZGDBRZrmqI1m9rdKyy2MmfSaL3epAlM0ie6JhWqZBFdyXylF28TOYZeIgNOSL1Gx9UTZFP-PHsvOqWbbo5MzyK9SRRUDDgeDGwvyRe39gVY1V5qt91o_QtKrZQjg2ZNJr4acFRuNwIEYtHWr9ftHx1qvLL0kAi46kmt5WS6zD0qA=\",\"format\":\"openai-responses-v1\",\"id\":\"rs_0391ef47688a2d1f016a2b39e782e48192a1b3de13dd2e38b9\",\"index\":0}]},\"finish_reason\":null,\"native_finish_reason\":null}]}\n\n",
+  "data: {\"id\":\"gen-1781217767-p4PfHJuwCl2PJ6bCtoe9\",\"object\":\"chat.completion.chunk\",\"created\":1781217767,\"model\":\"openai/o4-mini-2025-04-16\",\"provider\":\"OpenAI\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\",\"role\":\"assistant\",\"reasoning\":null},\"finish_reason\":\"length\",\"native_finish_reason\":\"max_output_tokens\"}]}\n\n",
+  "data: {\"id\":\"gen-1781217767-p4PfHJuwCl2PJ6bCtoe9\",\"object\":\"chat.completion.chunk\",\"created\":1781217767,\"model\":\"openai/o4-mini-2025-04-16\",\"provider\":\"OpenAI\",\"service_tier\":\"default\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\",\"role\":\"assistant\"},\"finish_reason\":\"length\",\"native_finish_reason\":\"max_output_tokens\"}],\"usage\":{\"prompt_tokens\":80,\"completion_tokens\":192,\"total_tokens\":272,\"cost\":0.0009328,\"is_byok\":false,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":0,\"audio_tokens\":0,\"video_tokens\":0},\"cost_details\":{\"upstream_inference_cost\":0.0009328,\"upstream_inference_prompt_cost\":0.000088,\"upstream_inference_completions_cost\":0.0008448},\"completion_tokens_details\":{\"reasoning_tokens\":192,\"image_tokens\":0,\"audio_tokens\":0}}}\n\ndata: [DONE]\n\n",
+]
+[response.headers]
+content-type = "text/event-stream"
+transfer-encoding = "chunked"
+cache-control = "no-cache"
+

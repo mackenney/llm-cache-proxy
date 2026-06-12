@@ -1,0 +1,63 @@
+schema = 1
+provider = "gemini"
+scenario = "gem_multi_part_thinking"
+model = "gemini-2.5-flash"
+recorded_at = "2026-06-11"
+secret_kind = "gemini"
+
+[request]
+method = "POST"
+path = "/v1beta/models/gemini-2.5-flash:streamGenerateContent"
+content_type = "application/json"
+body = """
+{
+  "contents": [
+    {
+      "role": "user",
+      "parts": [
+        {
+          "text": "First explain briefly what you will do, then call store_key with: AIza7ciOdcWvIygdjjiM4Rqs80yKKt6j7GZo_hB"
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "function_declarations": [
+        {
+          "name": "store_key",
+          "description": "Store an API key.",
+          "parameters": {
+            "type": "OBJECT",
+            "properties": {
+              "key": {
+                "type": "STRING"
+              }
+            },
+            "required": [
+              "key"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "generationConfig": {
+    "thinkingConfig": {
+      "thinkingBudget": 0
+    }
+  }
+}
+"""
+
+[[response]]
+status = 200
+
+body_chunks = [
+  "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"I will store the\"}],\"role\": \"model\"},\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 82,\"candidatesTokenCount\": 4,\"totalTokenCount\": 86,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 82}],\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-2.5-flash\",\"responseId\": \"WzoraurbEu-rqtsPgcy0kA4\"}\r\n\r\n",
+  "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \" provided API key using the `store_key` function.\"}],\"role\": \"model\"},\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 82,\"candidatesTokenCount\": 16,\"totalTokenCount\": 98,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 82}],\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-2.5-flash\",\"responseId\": \"WzoraurbEu-rqtsPgcy0kA4\"}\r\n\r\n",
+  "data: {\"candidates\": [{\"content\": {\"parts\": [{\"functionCall\": {\"name\": \"store_key\",\"args\": {\"key\": \"AIza7ciOdcWvIygdjjiM4Rqs80yKKt6j7GZo_hB\"}}}],\"role\": \"model\"},\"finishReason\": \"STOP\",\"index\": 0,\"finishMessage\": \"Model generated function call(s).\"}],\"usageMetadata\": {\"promptTokenCount\": 82,\"candidatesTokenCount\": 59,\"totalTokenCount\": 141,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 82}],\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-2.5-flash\",\"responseId\": \"WzoraurbEu-rqtsPgcy0kA4\"}\r\n\r\n",
+]
+[response.headers]
+content-type = "text/event-stream"
+

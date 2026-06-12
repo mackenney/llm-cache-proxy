@@ -76,13 +76,14 @@ enum WriteBackInfo {
 
 /// Returns `true` if the first bytes of a response chunk look like an SSE stream.
 ///
-/// Detects `data: `, `event: `, and `: ` (SSE comment) line starters. Anthropic's
-/// real API prefixes each data line with a named `event:` line. OpenRouter prefixes
-/// the stream with a `\`: OPENROUTER PROCESSING` comment before any data lines.
-/// Non-SSE JSON responses begin with `{` or `[`.
+/// Detects `data: `, `data:` (spaceless), `event: `, `event:` (spaceless), `": "` (SSE
+/// comment with space), and `":"` followed by newline (empty SSE comment, no space).
+/// Anthropic's real API prefixes each data line with a named `event:` line.
+/// OpenRouter prefixes the stream with a `": OPENROUTER PROCESSING` comment before
+/// any data lines. Non-SSE JSON responses begin with `{` or `[`.
 pub fn is_sse_first_chunk(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"data: ")
-        || bytes.starts_with(b"event: ")
+    bytes.starts_with(b"data:")
+        || bytes.starts_with(b"event:")
         || bytes.starts_with(b": ")  // SSE comment line (e.g., OpenRouter)
         || bytes.starts_with(b":\n") // empty SSE comment
 }
@@ -162,7 +163,7 @@ fn extract_fields(
                             if let Some(text) = json.get("delta").and_then(|v| v.as_str()) {
                                 vec![ExtractedField {
                                     key: FieldKey::ResponsesApiDelta {
-                                        event_type: "output_text".into(),
+                                        event_type: "response.output_text.delta".into(),
                                     },
                                     text: text.to_owned(),
                                 }]
@@ -174,7 +175,7 @@ fn extract_fields(
                             if let Some(text) = json.get("text").and_then(|v| v.as_str()) {
                                 vec![ExtractedField {
                                     key: FieldKey::ResponsesApiDone {
-                                        event_type: "output_text".into(),
+                                        event_type: "response.output_text.done".into(),
                                     },
                                     text: text.to_owned(),
                                 }]
@@ -186,7 +187,7 @@ fn extract_fields(
                             if let Some(text) = json.get("delta").and_then(|v| v.as_str()) {
                                 vec![ExtractedField {
                                     key: FieldKey::ResponsesApiDelta {
-                                        event_type: "reasoning_summary_text".into(),
+                                        event_type: "response.reasoning_summary_text.delta".into(),
                                     },
                                     text: text.to_owned(),
                                 }]
@@ -207,10 +208,14 @@ fn extract_fields(
             let mut fields = Vec::new();
 
             if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
-                fields.push(ExtractedField {
-                    key: FieldKey::OpenAiContent,
-                    text: text.to_owned(),
-                });
+                // Skip empty-string content: it carries no secret and must not prevent
+                // classify_terminal from running for co-located finish_reason frames.
+                if !text.is_empty() {
+                    fields.push(ExtractedField {
+                        key: FieldKey::OpenAiContent,
+                        text: text.to_owned(),
+                    });
+                }
             }
 
             if let Some(text) = delta.get("reasoning_content").and_then(|v| v.as_str()) {
@@ -858,6 +863,71 @@ fn process_sse_chunk(
     Ok(())
 }
 
+/// Scope of a terminal SSE event per SPEC.md §Terminal Event Ordering.
+enum TerminalScope {
+    /// Terminates one Anthropic content block; flush only
+    /// `AnthropicDelta { index == N }` buffers (VC-SSE-16 isolation).
+    Block(u64),
+    /// Terminates the whole response; flush all buffers.
+    Stream,
+}
+
+/// Returns the flush scope for a terminal SSE event, or `None` for non-terminal events.
+///
+/// Classification is provider-gated per SPEC.md §Terminal Event Ordering.
+///
+/// MUST only be called for frames where `extract_fields` returned empty. Co-located
+/// content+terminal frames (VC-SSE-19 for Gemini) are handled by path B and MUST NOT
+/// reach this function.
+fn classify_terminal(
+    json: &serde_json::Value,
+    event_type: Option<&str>,
+    provider: Provider,
+) -> Option<TerminalScope> {
+    match provider {
+        Provider::Anthropic => match json["type"].as_str() {
+            Some("content_block_stop") => Some(
+                json["index"]
+                    .as_u64()
+                    .map(TerminalScope::Block)
+                    .unwrap_or(TerminalScope::Stream),
+            ),
+            Some("message_delta") | Some("message_stop") => Some(TerminalScope::Stream),
+            _ => None,
+        },
+        Provider::OpenAi | Provider::OpenRouter => {
+            if let Some(
+                "response.content_part.done"
+                | "response.output_item.done"
+                | "response.completed"
+                | "response.failed"
+                | "response.cancelled"
+                | "response.incomplete",
+            ) = event_type
+            {
+                return Some(TerminalScope::Stream);
+            }
+            if json
+                .pointer("/choices/0/finish_reason")
+                .is_some_and(|v| !v.is_null())
+            {
+                return Some(TerminalScope::Stream);
+            }
+            None
+        }
+        Provider::Gemini => {
+            if json
+                .pointer("/candidates/0/finishReason")
+                .is_some_and(|v| !v.is_null())
+            {
+                Some(TerminalScope::Stream)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// Processes one complete SSE frame (ends with `\n\n`).
 fn process_one_frame(
     frame: &str,
@@ -866,8 +936,14 @@ fn process_one_frame(
     output_queue: &mut VecDeque<Bytes>,
     deferred_passthrough: &mut VecDeque<Bytes>,
 ) -> io::Result<()> {
-    let event_type = frame.lines().find_map(|l| l.strip_prefix("event: "));
-    let data_content = frame.lines().find_map(|l| l.strip_prefix("data: "));
+    let event_type = frame.lines().find_map(|l| {
+        l.strip_prefix("event: ")
+            .or_else(|| l.strip_prefix("event:"))
+            .filter(|s| !s.is_empty())
+    });
+    let data_content = frame
+        .lines()
+        .find_map(|l| l.strip_prefix("data: ").or_else(|| l.strip_prefix("data:")));
 
     let Some(data_str) = data_content else {
         // No data line (comment / keep-alive): pass through immediately.
@@ -876,14 +952,41 @@ fn process_one_frame(
     };
 
     let Ok(json) = serde_json::from_str::<serde_json::Value>(data_str) else {
-        // Not JSON (e.g. "[DONE]"): pass through immediately.
+        // "[DONE]" is the Chat Completions stream terminator (OpenAI/OpenRouter
+        // only): complete-flush all buffers before forwarding (SPEC VC-SSE-17).
+        // Anthropic and Gemini never emit [DONE]; they use JSON terminals
+        // (message_stop, finishReason). The provider guard prevents spurious
+        // flushes from stray non-JSON frames.
+        if data_str.trim() == "[DONE]"
+            && matches!(ctx.provider, Provider::OpenAi | Provider::OpenRouter)
+        {
+            flush_all_accumulators(accumulators, ctx.entries, ctx.session_key, output_queue)?;
+        }
         output_queue.push_back(Bytes::from(frame.as_bytes().to_vec()));
         return Ok(());
     };
 
     let extracted = extract_fields(&json, ctx.provider, event_type);
     if extracted.is_empty() {
-        // Non-text delta (e.g. message_start): pass through immediately.
+        match classify_terminal(&json, event_type, ctx.provider) {
+            Some(TerminalScope::Block(n)) => flush_accumulators_where(
+                accumulators,
+                |k| matches!(k, FieldKey::AnthropicDelta { index, .. } if *index == n),
+                ctx.entries,
+                ctx.session_key,
+                output_queue,
+            )?,
+            Some(TerminalScope::Stream) => {
+                flush_all_accumulators(accumulators, ctx.entries, ctx.session_key, output_queue)?;
+                // Drain Gemini deferred pass-through (non-text metadata) before the
+                // terminal frame so clients that finalize on finishReason see tool
+                // args first (SPEC VC-SSE-12, VC-SSE-11).
+                if ctx.provider == Provider::Gemini {
+                    output_queue.extend(deferred_passthrough.drain(..));
+                }
+            }
+            None => {}
+        }
         output_queue.push_back(Bytes::from(frame.as_bytes().to_vec()));
         return Ok(());
     }
@@ -948,14 +1051,6 @@ fn process_one_frame(
             ctx.session_key,
             output_queue,
         )?;
-        flush_safe_prefix(
-            key,
-            accum,
-            ctx.max_fake_len,
-            ctx.entries,
-            ctx.session_key,
-            output_queue,
-        )?;
     }
 
     Ok(())
@@ -963,8 +1058,15 @@ fn process_one_frame(
 
 /// Flushes the safe prefix of one accumulation buffer into `output_queue`.
 ///
-/// Safe prefix length = `accum.len() - max_fake_len`. Bytes within the hold
-/// window may still be part of a fake that spans the current boundary.
+/// The nominal safe length is `accum.len() - max_fake_len`. Before using that
+/// boundary, we scan for any fake whose prefix appears as a suffix of the nominal
+/// safe region. If one is found, the safe boundary is retracted to just before
+/// that partial match, preventing the fake from being split across two restore
+/// calls — which would make neither half match the Aho-Corasick automaton.
+///
+/// During terminal flushes (`max_fake_len == 0`) the entire accumulator is
+/// flushed unconditionally; no partial-match check is needed because the
+/// complete fake must already be present.
 fn flush_safe_prefix(
     key: &FieldKey,
     accum: &mut String,
@@ -976,13 +1078,38 @@ fn flush_safe_prefix(
     if accum.len() <= max_fake_len {
         return Ok(());
     }
-    let target = accum.len() - max_fake_len;
-    // Round down to the nearest char boundary.
-    let safe_len = accum[..target]
-        .char_indices()
-        .last()
-        .map(|(i, c)| i + c.len_utf8())
-        .unwrap_or(0);
+    let nominal_target = accum.len() - max_fake_len;
+
+    // During non-terminal flushes, retract the boundary if any fake prefix
+    // appears as a suffix of the nominal safe region. Iterate from the longest
+    // possible match downward so we find the leftmost partial-fake start.
+    let target = if max_fake_len > 0 {
+        let accum_bytes = accum.as_bytes();
+        let mut safe_target = nominal_target;
+        'entries: for entry in entries {
+            let fake = &entry.fake;
+            let max_k = fake.len().saturating_sub(1).min(nominal_target);
+            for k in (1..=max_k).rev() {
+                if accum_bytes[nominal_target - k..nominal_target] == fake[..k] {
+                    safe_target = safe_target.min(nominal_target - k);
+                    continue 'entries;
+                }
+            }
+        }
+        safe_target
+    } else {
+        nominal_target
+    };
+
+    // target is a byte offset derived from fake key lengths and can fall inside a
+    // multibyte codepoint. Walk back to the nearest char boundary (largest index
+    // <= target that starts a char). floor_char_boundary would be idiomatic here
+    // but requires Rust 1.91; MSRV is 1.85.
+    let mut target = target;
+    while target > 0 && !accum.is_char_boundary(target) {
+        target -= 1;
+    }
+    let safe_len = target;
     if safe_len == 0 {
         return Ok(());
     }
@@ -1002,6 +1129,25 @@ fn flush_safe_prefix(
     Ok(())
 }
 
+/// Completely flushes (hold window = 0) every accumulation buffer whose
+/// key satisfies `pred`. Used for terminal-event flushes (SPEC.md
+/// §Terminal Event Ordering) and, via flush_all_accumulators, at EOF.
+fn flush_accumulators_where(
+    accumulators: &mut BTreeMap<FieldKey, String>,
+    pred: impl Fn(&FieldKey) -> bool,
+    entries: &[Entry],
+    session_key: &SessionKey,
+    output_queue: &mut VecDeque<Bytes>,
+) -> io::Result<()> {
+    for (key, accum) in accumulators.iter_mut() {
+        if accum.is_empty() || !pred(key) {
+            continue;
+        }
+        flush_safe_prefix(key, accum, 0, entries, session_key, output_queue)?;
+    }
+    Ok(())
+}
+
 /// Flushes all accumulation buffers completely (called at stream EOF).
 fn flush_all_accumulators(
     accumulators: &mut BTreeMap<FieldKey, String>,
@@ -1009,13 +1155,7 @@ fn flush_all_accumulators(
     session_key: &SessionKey,
     output_queue: &mut VecDeque<Bytes>,
 ) -> io::Result<()> {
-    for (key, accum) in accumulators.iter_mut() {
-        if accum.is_empty() {
-            continue;
-        }
-        flush_safe_prefix(key, accum, 0, entries, session_key, output_queue)?;
-    }
-    Ok(())
+    flush_accumulators_where(accumulators, |_| true, entries, session_key, output_queue)
 }
 
 /// Builds a synthetic SSE frame with `text` embedded in the correct JSON path
@@ -1606,7 +1746,7 @@ mod tests {
         assert_eq!(
             fields[0].key,
             FieldKey::ResponsesApiDelta {
-                event_type: "output_text".into()
+                event_type: "response.output_text.delta".into()
             }
         );
         assert_eq!(fields[0].text, "Hello world");
@@ -1625,7 +1765,7 @@ mod tests {
         assert_eq!(
             fields[0].key,
             FieldKey::ResponsesApiDone {
-                event_type: "output_text".into()
+                event_type: "response.output_text.done".into()
             }
         );
         assert_eq!(fields[0].text, "Full assembled text here");
@@ -1648,7 +1788,7 @@ mod tests {
         assert_eq!(
             fields[0].key,
             FieldKey::ResponsesApiDelta {
-                event_type: "reasoning_summary_text".into()
+                event_type: "response.reasoning_summary_text.delta".into()
             }
         );
     }
@@ -1848,5 +1988,677 @@ mod tests {
             v["candidates"][0]["content"]["parts"][0]["functionCall"]["args"]["count"],
             json!(5)
         );
+    }
+    #[test]
+    fn flush_where_only_matching_keys() {
+        // Two accumulators: index 0 and index 1.
+        // Flush with a predicate that matches only index 0.
+        // After the call: index-0 buffer drained into output_queue,
+        // index-1 buffer untouched and absent from output_queue.
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "text_delta".to_owned(),
+                index: 0,
+            },
+            "hello".to_owned(),
+        );
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "input_json_delta".to_owned(),
+                index: 1,
+            },
+            "world".to_owned(),
+        );
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        flush_accumulators_where(
+            &mut accumulators,
+            |k| matches!(k, FieldKey::AnthropicDelta { index: 0, .. }),
+            &[],
+            &session_key,
+            &mut output_queue,
+        )
+        .unwrap();
+        // Index-0 buffer flushed: accumulator is empty, output_queue has one frame.
+        assert!(
+            accumulators[&FieldKey::AnthropicDelta {
+                delta_type: "text_delta".to_owned(),
+                index: 0,
+            }]
+                .is_empty()
+        );
+        assert_eq!(output_queue.len(), 1);
+        let frame = std::str::from_utf8(&output_queue[0]).unwrap();
+        assert!(
+            frame.contains("hello"),
+            "frame should contain 'hello': {frame}"
+        );
+        // Index-1 buffer untouched.
+        assert_eq!(
+            accumulators[&FieldKey::AnthropicDelta {
+                delta_type: "input_json_delta".to_owned(),
+                index: 1,
+            }],
+            "world"
+        );
+    }
+
+    #[test]
+    fn flush_where_block_scope_drains_all_delta_types_at_same_index() {
+        // Two accumulators share index 0 but have different delta_type values.
+        // A Block(0) predicate must drain BOTH, ensuring the `..` wildcard over
+        // delta_type is load-bearing: narrowing it to a single type would leave
+        // the sibling buffer un-flushed, violating VC-SSE-16.
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "text_delta".to_owned(),
+                index: 0,
+            },
+            "hello".to_owned(),
+        );
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "input_json_delta".to_owned(),
+                index: 0,
+            },
+            "world".to_owned(),
+        );
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        flush_accumulators_where(
+            &mut accumulators,
+            |k| matches!(k, FieldKey::AnthropicDelta { index: 0, .. }),
+            &[],
+            &session_key,
+            &mut output_queue,
+        )
+        .unwrap();
+        // Both index-0 buffers drained regardless of delta_type.
+        for accum in accumulators.values() {
+            assert!(accum.is_empty(), "accumulator not empty: {accum:?}");
+        }
+        assert_eq!(
+            output_queue.len(),
+            2,
+            "expected two frames (one per delta_type)"
+        );
+        let frames: Vec<&str> = output_queue
+            .iter()
+            .map(|b| std::str::from_utf8(b).unwrap())
+            .collect();
+        assert!(
+            frames.iter().any(|f| f.contains("hello")),
+            "'hello' frame missing from output"
+        );
+        assert!(
+            frames.iter().any(|f| f.contains("world")),
+            "'world' frame missing from output"
+        );
+    }
+
+    #[test]
+    fn flush_where_true_flushes_all() {
+        // Predicate |_| true must drain every non-empty accumulator.
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "text_delta".to_owned(),
+                index: 0,
+            },
+            "hello".to_owned(),
+        );
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "input_json_delta".to_owned(),
+                index: 1,
+            },
+            "world".to_owned(),
+        );
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        flush_accumulators_where(
+            &mut accumulators,
+            |_| true,
+            &[],
+            &session_key,
+            &mut output_queue,
+        )
+        .unwrap();
+        // Both buffers drained.
+        for accum in accumulators.values() {
+            assert!(accum.is_empty(), "accumulator not empty: {accum:?}");
+        }
+        assert_eq!(output_queue.len(), 2);
+    }
+
+    #[test]
+    fn classify_terminal_anthropic_content_block_stop_with_index() {
+        let json0 = serde_json::json!({"type": "content_block_stop", "index": 0});
+        let json3 = serde_json::json!({"type": "content_block_stop", "index": 3});
+        assert!(
+            matches!(
+                classify_terminal(&json0, None, Provider::Anthropic),
+                Some(TerminalScope::Block(0))
+            ),
+            "index 0 should be Block(0)"
+        );
+        assert!(
+            matches!(
+                classify_terminal(&json3, None, Provider::Anthropic),
+                Some(TerminalScope::Block(3))
+            ),
+            "index 3 should be Block(3)"
+        );
+    }
+
+    #[test]
+    fn classify_terminal_anthropic_content_block_stop_missing_index_falls_back_to_stream() {
+        let json = serde_json::json!({"type": "content_block_stop"});
+        assert!(matches!(
+            classify_terminal(&json, None, Provider::Anthropic),
+            Some(TerminalScope::Stream)
+        ));
+        let json_bad_index = serde_json::json!({"type": "content_block_stop", "index": "bad"});
+        assert!(matches!(
+            classify_terminal(&json_bad_index, None, Provider::Anthropic),
+            Some(TerminalScope::Stream)
+        ));
+    }
+
+    #[test]
+    fn classify_terminal_anthropic_stream_scope_events() {
+        for ty in ["message_delta", "message_stop"] {
+            let json = serde_json::json!({"type": ty});
+            assert!(
+                matches!(
+                    classify_terminal(&json, None, Provider::Anthropic),
+                    Some(TerminalScope::Stream)
+                ),
+                "{ty} should be Stream"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_terminal_anthropic_non_terminal_events_return_none() {
+        for ty in ["ping", "message_start", "content_block_start"] {
+            let json = serde_json::json!({"type": ty});
+            assert!(
+                classify_terminal(&json, None, Provider::Anthropic).is_none(),
+                "{ty} should be None"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_terminal_openai_chat_finish_reason_stream() {
+        let json = serde_json::json!({
+            "choices": [{"delta": {}, "finish_reason": "tool_calls"}]
+        });
+        assert!(matches!(
+            classify_terminal(&json, None, Provider::OpenAi),
+            Some(TerminalScope::Stream)
+        ));
+    }
+
+    #[test]
+    fn classify_terminal_openai_chat_null_finish_reason_is_none() {
+        let json = serde_json::json!({
+            "choices": [{"delta": {"content": "x"}, "finish_reason": null}]
+        });
+        assert!(classify_terminal(&json, None, Provider::OpenAi).is_none());
+    }
+
+    #[test]
+    fn classify_terminal_openai_responses_api_terminal_event_types() {
+        for et in [
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.completed",
+            "response.failed",
+            "response.cancelled",
+            "response.incomplete",
+        ] {
+            let json = serde_json::json!({});
+            assert!(
+                matches!(
+                    classify_terminal(&json, Some(et), Provider::OpenAi),
+                    Some(TerminalScope::Stream)
+                ),
+                "{et} should be Stream"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_terminal_openai_responses_api_non_terminal_event_types() {
+        for et in [
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.content_part.added",
+        ] {
+            let json = serde_json::json!({});
+            assert!(
+                classify_terminal(&json, Some(et), Provider::OpenAi).is_none(),
+                "{et} should be None"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_terminal_openrouter_finish_reason_stream() {
+        let json = serde_json::json!({
+            "choices": [{"delta": {}, "finish_reason": "stop"}]
+        });
+        assert!(matches!(
+            classify_terminal(&json, None, Provider::OpenRouter),
+            Some(TerminalScope::Stream)
+        ));
+    }
+
+    #[test]
+    fn classify_terminal_gemini_with_finish_reason_is_stream() {
+        let json = serde_json::json!({
+            "candidates": [{"finishReason": "STOP"}]
+        });
+        assert!(matches!(
+            classify_terminal(&json, None, Provider::Gemini),
+            Some(TerminalScope::Stream)
+        ));
+    }
+
+    #[test]
+    fn classify_terminal_gemini_without_finish_reason_is_none() {
+        let json = serde_json::json!({
+            "candidates": [{"content": {"parts": [{"text": "hello"}]}}]
+        });
+        assert!(classify_terminal(&json, None, Provider::Gemini).is_none());
+    }
+
+    #[test]
+    fn classify_terminal_cross_provider_guard_anthropic_shape_under_gemini_is_none() {
+        // Anthropic message_stop JSON must not trigger a flush under Gemini.
+        let json = serde_json::json!({"type": "message_stop"});
+        assert!(classify_terminal(&json, None, Provider::Gemini).is_none());
+    }
+
+    #[test]
+    fn process_one_frame_content_block_stop_flushes_accumulator_before_stop_frame() {
+        // Accumulator for AnthropicDelta index 0 holds text "hello".
+        // Feed a content_block_stop index-0 frame.
+        // The synthetic content frame must appear BEFORE the stop frame in output_queue.
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(
+            FieldKey::AnthropicDelta {
+                delta_type: "text_delta".to_owned(),
+                index: 0,
+            },
+            "hello".to_owned(),
+        );
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let ctx = SseCtx {
+            entries: &[],
+            session_key: &session_key,
+            provider: Provider::Anthropic,
+            max_fake_len: 0,
+        };
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        let mut deferred: VecDeque<Bytes> = VecDeque::new();
+        let frame =
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
+        process_one_frame(
+            frame,
+            &mut accumulators,
+            &ctx,
+            &mut output_queue,
+            &mut deferred,
+        )
+        .unwrap();
+        assert_eq!(
+            output_queue.len(),
+            2,
+            "expected synthetic frame + stop frame"
+        );
+        let first = std::str::from_utf8(&output_queue[0]).unwrap();
+        let second = std::str::from_utf8(&output_queue[1]).unwrap();
+        assert!(
+            first.contains("hello"),
+            "first frame should contain accumulator text: {first}"
+        );
+        assert!(
+            second.contains("content_block_stop"),
+            "second frame should be the stop frame: {second}"
+        );
+    }
+
+    #[test]
+    fn gemini_deferred_passthrough_drains_before_finish_reason_frame() {
+        // Accumulator holds Gemini text "hello"; deferred queue holds one
+        // non-text frame (e.g. grounding metadata).  Feeding a finishReason
+        // frame must produce: [text flush] [deferred] [finishReason], in that
+        // order, so clients that finalize on finishReason receive tool args.
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(FieldKey::GeminiText { thought: false }, "hello".to_owned());
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let ctx = SseCtx {
+            entries: &[],
+            session_key: &session_key,
+            provider: Provider::Gemini,
+            max_fake_len: 0,
+        };
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        let mut deferred: VecDeque<Bytes> = VecDeque::new();
+        deferred.push_back(Bytes::from_static(b"data: {\"groundingMetadata\":{}}\n\n"));
+        let frame = "data: {\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n";
+        process_one_frame(
+            frame,
+            &mut accumulators,
+            &ctx,
+            &mut output_queue,
+            &mut deferred,
+        )
+        .unwrap();
+        assert_eq!(
+            output_queue.len(),
+            3,
+            "expected text flush + deferred + finishReason"
+        );
+        let first = std::str::from_utf8(&output_queue[0]).unwrap();
+        let second = std::str::from_utf8(&output_queue[1]).unwrap();
+        let third = std::str::from_utf8(&output_queue[2]).unwrap();
+        assert!(
+            first.contains("hello"),
+            "first frame must be text flush: {first}"
+        );
+        assert!(
+            second.contains("groundingMetadata"),
+            "second frame must be deferred metadata: {second}"
+        );
+        assert!(
+            third.contains("finishReason"),
+            "third frame must be the finishReason terminal: {third}"
+        );
+        assert!(
+            deferred.is_empty(),
+            "deferred queue must be empty after drain"
+        );
+    }
+
+    #[test]
+    fn is_sse_detects_spaceless_data_prefix() {
+        assert!(is_sse_first_chunk(b"data:{\"type\":\"ping\"}\n\n"));
+    }
+
+    #[test]
+    fn process_one_frame_data_spaceless_prefix_is_parsed() {
+        // A frame with spaceless "data:{...}" MUST be parsed as normal SSE, not
+        // silently dropped. message_stop is a stream-scope terminal under Anthropic:
+        // flush_all_accumulators (empty) is called, then the frame is forwarded.
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let ctx = SseCtx {
+            entries: &[],
+            session_key: &session_key,
+            provider: Provider::Anthropic,
+            max_fake_len: 0,
+        };
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        let mut deferred: VecDeque<Bytes> = VecDeque::new();
+        process_one_frame(
+            "data:{\"type\":\"message_stop\"}\n\n",
+            &mut accumulators,
+            &ctx,
+            &mut output_queue,
+            &mut deferred,
+        )
+        .unwrap();
+        assert_eq!(
+            output_queue.len(),
+            1,
+            "spaceless data: frame must produce one passthrough frame"
+        );
+        let frame = std::str::from_utf8(&output_queue[0]).unwrap();
+        assert!(
+            frame.contains("message_stop"),
+            "frame must contain parsed content: {frame}"
+        );
+    }
+
+    #[test]
+    fn process_one_frame_done_spaceless_flushes_under_openai() {
+        // A spaceless "data:[DONE]" MUST flush all accumulators under OpenAI,
+        // identical to "data: [DONE]" (with space).
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(FieldKey::OpenAiContent, "held_text".to_owned());
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let ctx = SseCtx {
+            entries: &[],
+            session_key: &session_key,
+            provider: Provider::OpenAi,
+            max_fake_len: 0,
+        };
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        let mut deferred: VecDeque<Bytes> = VecDeque::new();
+        process_one_frame(
+            "data:[DONE]\n\n",
+            &mut accumulators,
+            &ctx,
+            &mut output_queue,
+            &mut deferred,
+        )
+        .unwrap();
+        assert!(
+            accumulators[&FieldKey::OpenAiContent].is_empty(),
+            "accumulator must be flushed by spaceless [DONE]"
+        );
+        assert_eq!(
+            output_queue.len(),
+            2,
+            "expected synthetic frame + [DONE] frame"
+        );
+        let frames: Vec<&str> = output_queue
+            .iter()
+            .map(|b| std::str::from_utf8(b).unwrap())
+            .collect();
+        assert!(
+            frames.iter().any(|f| f.contains("held_text")),
+            "synthetic frame must carry accumulated text"
+        );
+        assert!(
+            frames.iter().any(|f| f.contains("[DONE]")),
+            "[DONE] frame must be present in output"
+        );
+    }
+
+    #[test]
+    fn process_one_frame_done_under_gemini_does_not_flush() {
+        // "[DONE]" under Gemini MUST NOT trigger a flush: Gemini terminates
+        // with finishReason (JSON), not [DONE]. Guard is intentional.
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(
+            FieldKey::GeminiText { thought: false },
+            "held_content".to_owned(),
+        );
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let ctx = SseCtx {
+            entries: &[],
+            session_key: &session_key,
+            provider: Provider::Gemini,
+            max_fake_len: 0,
+        };
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        let mut deferred: VecDeque<Bytes> = VecDeque::new();
+        process_one_frame(
+            "data: [DONE]\n\n",
+            &mut accumulators,
+            &ctx,
+            &mut output_queue,
+            &mut deferred,
+        )
+        .unwrap();
+        assert_eq!(
+            accumulators[&FieldKey::GeminiText { thought: false }],
+            "held_content",
+            "[DONE] under Gemini MUST NOT flush the accumulator"
+        );
+        assert_eq!(output_queue.len(), 1, "[DONE] frame must pass through");
+    }
+
+    #[test]
+    fn process_one_frame_done_spaceless_under_gemini_does_not_flush() {
+        // A spaceless "data:[DONE]" under Gemini MUST NOT trigger a flush,
+        // same as the spaced form. Gemini terminates with finishReason (JSON).
+        let mut accumulators: BTreeMap<FieldKey, String> = BTreeMap::new();
+        accumulators.insert(
+            FieldKey::GeminiText { thought: false },
+            "held_content".to_owned(),
+        );
+        let session_key = SessionKey::from_bytes([0u8; 32]);
+        let ctx = SseCtx {
+            entries: &[],
+            session_key: &session_key,
+            provider: Provider::Gemini,
+            max_fake_len: 0,
+        };
+        let mut output_queue: VecDeque<Bytes> = VecDeque::new();
+        let mut deferred: VecDeque<Bytes> = VecDeque::new();
+        process_one_frame(
+            "data:[DONE]\n\n",
+            &mut accumulators,
+            &ctx,
+            &mut output_queue,
+            &mut deferred,
+        )
+        .unwrap();
+        assert_eq!(
+            accumulators[&FieldKey::GeminiText { thought: false }],
+            "held_content",
+            "spaceless [DONE] under Gemini MUST NOT flush the accumulator"
+        );
+        assert_eq!(output_queue.len(), 1, "[DONE] frame must pass through");
+    }
+}
+
+#[cfg(test)]
+mod flush_safe_prefix_char_boundary_tests {
+    //! Regression tests for the panic in `flush_safe_prefix` when the byte
+    //! offset `target` (derived from fake key lengths) falls inside a
+    //! multibyte UTF-8 codepoint.
+    //!
+    //! Trigger conditions:
+    //!   nominal_target = accum.len() - max_fake_len
+    //! If a multibyte char (emoji=4 bytes, CJK=3 bytes, Greek=2 bytes) straddles
+    //! that boundary, `accum[..target]` panics with
+    //! "end byte index N is not a char boundary".
+    use super::*;
+    use bytes::Bytes;
+    use doppel::patterns;
+    use futures_util::StreamExt;
+    use std::io;
+
+    // Real Anthropic key that matches the structural pattern.
+    // NOT a live credential.
+    const ANT: &[u8] = b"sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    /// Swap ANT through the doppel detector, return (entries, session_key, fake_len).
+    fn swap_ant() -> (Vec<doppel::Entry>, doppel::SessionKey, usize) {
+        let detector = doppel::Detector::new(vec![patterns::anthropic()]);
+        let body = [b"key: ".as_slice(), ANT].concat();
+        let result = detector.swap(&body).unwrap();
+        let fake_len = result.entries[0].fake.len();
+        (result.entries, result.session_key, fake_len)
+    }
+
+    /// Build an Anthropic SSE stream where a single text_delta accumulates
+    /// `text`, followed by message_stop.
+    fn anthropic_sse(text: &str) -> ResponseStream {
+        use futures_util::stream;
+        let event = format!(
+            "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":{}}}}}",
+            serde_json::to_string(text).unwrap()
+        );
+        let stop = "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_owned();
+        let full = format!("{}\n\n{}", event, stop);
+        Box::pin(stream::once(async move {
+            Ok::<Bytes, io::Error>(Bytes::from(full.into_bytes()))
+        }))
+    }
+
+    /// Collect a `SseRestoreStream` to bytes, panic-propagating any errors.
+    async fn collect(s: SseRestoreStream) -> Vec<u8> {
+        s.collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .map(|r| r.unwrap())
+            .flat_map(|b| b.to_vec())
+            .collect()
+    }
+
+    /// nominal_target falls at byte offset 2 inside a 4-byte emoji (🚀 = F0 9F 9A 80).
+    /// Layout: "A" * p + "🚀" + "B" * suffix
+    ///   accum byte-len  = p + 4 + suffix
+    ///   nominal_target  = p + 4 + suffix - fake_len
+    /// Choose p and suffix so nominal_target = p + 2 (inside 🚀).
+    ///   => p + 4 + suffix - fake_len = p + 2
+    ///   => suffix = fake_len - 2
+    #[tokio::test]
+    async fn no_panic_emoji_at_nominal_target() {
+        let (entries, session_key, fake_len) = swap_ant();
+        // Need suffix >= 0, so fake_len >= 2 (always true for Anthropic keys ~100 bytes).
+        assert!(fake_len >= 2, "fake key too short for this test");
+        let p = 10usize;
+        let suffix = fake_len - 2;
+        let text = format!("{}{}{}", "A".repeat(p), "🚀", "B".repeat(suffix));
+        let stream = anthropic_sse(&text);
+        // Before the fix this panics; after the fix it must complete.
+        let _out = collect(SseRestoreStream::new(
+            stream,
+            entries,
+            session_key,
+            Provider::Anthropic,
+        ))
+        .await;
+    }
+
+    /// nominal_target falls at byte offset 1 inside a 3-byte CJK character (好 = E5 A5 BD).
+    /// Layout: "A" * p + "好" + "B" * suffix
+    ///   nominal_target = p + 1 (inside 好)
+    ///   => p + 3 + suffix - fake_len = p + 1  =>  suffix = fake_len - 2
+    #[tokio::test]
+    async fn no_panic_cjk_at_nominal_target() {
+        let (entries, session_key, fake_len) = swap_ant();
+        assert!(fake_len >= 2);
+        let p = 5usize;
+        let suffix = fake_len - 2;
+        let text = format!("{}{}{}", "A".repeat(p), "好", "B".repeat(suffix));
+        let stream = anthropic_sse(&text);
+        let _out = collect(SseRestoreStream::new(
+            stream,
+            entries,
+            session_key,
+            Provider::Anthropic,
+        ))
+        .await;
+    }
+
+    /// nominal_target falls at byte offset 1 inside a 2-byte Greek codepoint (α = CE B1).
+    #[tokio::test]
+    async fn no_panic_greek_at_nominal_target() {
+        let (entries, session_key, fake_len) = swap_ant();
+        assert!(fake_len >= 1);
+        let p = 3usize;
+        let suffix = fake_len - 1;
+        let text = format!("{}{}{}", "A".repeat(p), "α", "B".repeat(suffix));
+        let stream = anthropic_sse(&text);
+        let _out = collect(SseRestoreStream::new(
+            stream,
+            entries,
+            session_key,
+            Provider::Anthropic,
+        ))
+        .await;
     }
 }

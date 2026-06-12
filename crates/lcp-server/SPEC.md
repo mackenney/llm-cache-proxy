@@ -300,8 +300,9 @@ wire carried only fakes.
 ### SSE-Aware Restore
 
 Phase 3 MUST apply restoring at the **semantic SSE text level** for
-responses where the first bytes of the stream match the `data: ` or `event: `
-SSE prefix. Anthropic streams begin with a named `event:` line (e.g.,
+responses where the first bytes of the stream match the `data: `, `data:`,
+`event: `, or `event:` SSE prefix (both spaced and spaceless forms are
+accepted). Anthropic streams begin with a named `event:` line (e.g.,
 `event: message_start`) before the `data:` line, so the first bytes are
 `event: ` rather than `data: `. The non-SSE (plain JSON) response path MUST
 continue to use byte-level restore unchanged — it works correctly there.
@@ -332,6 +333,10 @@ safe to restore and emit immediately as synthetic frames with provider-specific
 JSON structure. At stream EOF the remaining hold buffer is flushed. Output flows
 in real time — TTFB latency is bounded by `max_fake_len / text_generation_rate`.
 Outbound frame granularity MAY differ from the original.
+
+Terminal events (provider-specific stop signals) MUST also trigger an early
+complete flush of relevant buffers before the terminal frame is forwarded; see
+§Terminal Event Ordering below.
 
 #### Provider Content Fields
 
@@ -429,6 +434,95 @@ Each distinct content field MUST maintain its own independent accumulation
 buffer. Fakes MUST NOT be matched across the boundaries of different content
 fields.
 
+#### Terminal Event Ordering
+
+Non-content SSE frames that signal the end of a content block or the entire
+response MUST NOT be forwarded to the downstream client until all held content
+for the scope they terminate has been completely flushed. Forwarding a terminal
+event while content remains in the hold window inverts the protocol-mandated
+ordering: the client finalizes a content block before receiving its complete
+text, causing downstream parse errors on truncated content.
+
+Two scopes apply:
+
+- **Block-scope terminal**: terminates a specific content block. Before
+  forwarding, all accumulation buffers whose `FieldKey` is scoped to that
+  block MUST be completely flushed. Buffers for other active blocks are
+  unaffected.
+
+- **Stream-scope terminal**: terminates the entire response. Before
+  forwarding, ALL active accumulation buffers MUST be completely flushed.
+
+"Complete flush" in this context means a hold window of zero: all held bytes
+are processed and emitted as synthetic frames regardless of `max_fake_len`.
+This differs from the normal safe-prefix flush (hold window = `max_fake_len`),
+which only emits the prefix that cannot contain a fake boundary.
+
+##### Anthropic terminal events
+
+| Event (`type` field) | Scope | Buffers flushed |
+|---|---|---|
+| `content_block_stop` (with `index` = N) | Block | All `AnthropicDelta` keys where `index == N` |
+| `content_block_stop` with missing or non-integer `index` | Stream | All (conservative fallback: over-flushing unrelated blocks preserves ordering at the cost of VC-SSE-16 isolation for the malformed stop) |
+| `message_delta` | Stream | All |
+| `message_stop` | Stream | All |
+
+`ping`, `message_start`, and `content_block_start` are non-terminal events.
+They carry no accumulated content at the time they arrive — `message_start`
+precedes any delta, and `content_block_start` precedes the first delta for its
+block — and MUST NOT trigger a flush.
+
+##### OpenAI (Chat Completions) terminal events
+
+| Signal | Scope | Buffers flushed |
+|---|---|---|
+| Data frame where `choices[0].finish_reason` is non-null | Stream | All |
+| `[DONE]` (non-JSON `data:` value) | Stream | All |
+
+The finish-reason frame carries an empty `delta` object and no extractable
+content fields. It MUST still trigger a complete flush of all accumulators
+before being forwarded.
+
+##### OpenAI (Responses API) terminal events
+
+Live observation of the real Responses API event sequence:
+`response.output_text.delta` ×N → `response.output_text.done` →
+`response.content_part.done` → `response.output_item.done` → `response.completed`.
+
+| Event type (`event:` line) | Scope | Buffers flushed |
+|---|---|---|
+| `response.content_part.done` | Stream | All |
+| `response.output_item.done` | Stream | All |
+| `response.completed` | Stream | All |
+| `response.failed` | Stream | All |
+| `response.cancelled` | Stream | All |
+| `response.incomplete` | Stream | All |
+
+`response.created`, `response.in_progress`, `response.output_item.added`,
+and `response.content_part.added` are non-terminal metadata events; they
+arrive before content accumulation begins for their associated item and
+MUST NOT trigger a flush.
+
+##### Gemini terminal events
+
+Live observation: Gemini sends `finishReason` **co-located with content**
+in the same `data:` frame. That frame has extractable content fields, so it
+goes through the content-accumulation path (path B) — not the passthrough
+path (path A). However, co-located `finishReason` in a path-B frame (content
++ `finishReason` together) is currently **NOT** forwarded to the client —
+the frame is consumed by path B and synthetic frames contain only the
+restored text content. The `finishReason` signal is lost. This is a known
+gap; see Known Limitations section.
+
+A frame where `candidates[0].finishReason` is non-null AND
+`extract_fields` returns empty (no content parts) constitutes a stream-scope
+terminal and MUST trigger a complete flush before forwarding. This covers
+error or edge-case frames that carry only a finish signal.
+
+| Signal | Scope | Buffers flushed |
+|---|---|---|
+| Frame with non-null `finishReason` and no extractable content | Stream | All |
+
 #### Verifiable Conditions
 
 **VC-SSE-1 (Anthropic thinking).** An Anthropic response containing a swapped
@@ -455,9 +549,9 @@ have the fake fully restored.
 a swapped fake split across `function_call.arguments` delta events MUST have
 the fake fully restored.
 
-
 **VC-SSE-6b (OpenAI refusal).** An OpenAI response containing a swapped fake
 in the `choices[0].delta.refusal` field MUST have the fake fully restored.
+
 **VC-SSE-7 (Responses API text).** An OpenAI Responses API stream
 (`v1/responses`) containing a swapped fake split across
 `response.output_text.delta` events MUST have the fake fully restored. The
@@ -489,3 +583,68 @@ independent content fields (e.g., both `delta.content` and
 `tool_calls[0].function.arguments`), fakes in each field MUST be restored
 independently. A partial fake at the end of one field's accumulation MUST NOT
 match against text from a different field.
+
+**VC-SSE-14 (Anthropic block-stop ordering).** Given a fake whose bytes span
+multiple `input_json_delta` events for content block index N such that some
+bytes remain in the hold window when `content_block_stop` for index N arrives:
+all synthetic frames carrying the remaining restored content for block N MUST
+appear in the output before the `content_block_stop` frame.
+
+**VC-SSE-15 (Anthropic message-stop ordering).** Given any accumulated content
+remaining in the hold window when `message_stop` arrives: all synthetic frames
+carrying the restored content MUST appear in the output before the
+`message_stop` frame.
+
+**VC-SSE-16 (Anthropic block-stop isolation).** Given two simultaneous active
+accumulation buffers for block index 0 and block index 1: when
+`content_block_stop` for index 0 arrives, the buffer for index 1 MUST NOT be
+flushed. Only block 0's buffer is flushed before the stop is forwarded.
+
+**VC-SSE-17 (OpenAI chat finish-reason ordering).** Given accumulated tool
+arguments or reasoning content remaining in the hold window when the frame
+with non-null `choices[0].finish_reason` arrives: all synthetic frames
+carrying the restored content MUST appear before the finish-reason frame.
+The `[DONE]` signal MUST appear after all restored content frames.
+
+**VC-SSE-18 (Responses API content_part.done ordering).** Given accumulated
+content remaining in the hold window when `response.content_part.done`
+arrives: all synthetic frames carrying the restored content MUST appear
+before the `response.content_part.done` frame. The same ordering constraint
+applies to `response.output_item.done` and `response.completed`: each MUST
+appear after all preceding restored content frames.
+
+**VC-SSE-18b (Responses API error terminal ordering).** Given accumulated content
+remaining in the hold window when any of `response.failed`, `response.cancelled`,
+or `response.incomplete` arrives, the proxy MUST flush all restored content before
+forwarding the error terminal event.
+
+**VC-SSE-19 (Gemini finishReason co-location).** When a Gemini frame carries
+both content parts and a non-null `finishReason`, it MUST be processed as a
+content-accumulation frame (path B). No ordering inversion occurs because
+the terminal signal is in the same frame as the content it terminates.
+
+**VC-SSE-20 (Gemini empty-terminal ordering).** If a Gemini frame carries a
+non-null `finishReason` and no extractable content (extract_fields returns
+empty), any accumulated content from prior frames MUST be emitted before
+that frame is forwarded.
+
+## Known Limitations
+
+### Gemini terminal metadata loss in synthetic frames
+
+When the SSE restore stream is active (at least one secret was detected in the
+request body), Gemini's `finishReason`, `usageMetadata`, and `modelVersion`
+fields are not preserved in the synthetic frames emitted by the restore
+stream. In practice, Gemini sends these fields co-located with the final
+content in a single `data:` frame. The restore stream accumulates the content,
+emits restored synthetic frames (which do not include `finishReason` or
+`usageMetadata`), and the original frame data carrying those fields is
+discarded. Downstream clients that depend on `finishReason` in the SSE stream
+will not receive it when the restore stream is active.
+
+This is an accepted limitation of the current synthetic-frame architecture.
+It does not affect cache correctness — the cached content contains the
+restored text — but it does affect streaming clients that inspect
+`finishReason` mid-stream. The limitation does not apply on cache hits
+(the stored exchange does not include SSE framing) or when no secret is
+detected (the restore stream is bypassed entirely).

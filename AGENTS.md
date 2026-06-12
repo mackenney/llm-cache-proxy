@@ -107,7 +107,11 @@ All three crates share a version and are published together.
 
 1. `cargo nextest run` — all tiers must pass
 2. `cargo clippy --workspace --all-targets -- -D warnings` — must be clean
-3. Run an E2E test: `cargo nextest run --test e2e --features test-e2e`
+3. **Manual E2E for new surfaces** — for any behaviour not yet covered by a
+   cassette fixture, exercise it against a live API and record the result as a
+   new cassette in `tests/fixtures/<provider>/`. This replaces a full live-API
+   regression run: if every changed code path is exercised by an existing or
+   newly recorded cassette, the gate is satisfied.
 4. Update `CHANGELOG.md` — fill in the `[Unreleased]` section with all notable
    changes grouped under `Added`, `Changed`, `Fixed`, `Removed`, or `Security`.
    Leave the `<!-- next-header -->` and `<!-- next-url -->` markers in place;

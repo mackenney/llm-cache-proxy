@@ -1,0 +1,27 @@
+schema = 1
+provider = "anthropic"
+scenario = "ant_empty_thinking"
+model = "claude-haiku-4-5"
+recorded_at = "2026-06-11"
+secret_kind = "anthropic"
+
+[[response]]
+status = 200
+
+body_chunks = [
+  "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-haiku-4-5-20251001\",\"id\":\"msg_01JuGi7kfy4U3wxGdyAzZLtB\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"stop_details\":null,\"usage\":{\"input_tokens\":49,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":0},\"output_tokens\":5,\"service_tier\":\"standard\",\"inference_geo\":\"not_available\"}}       }\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"\"}     }\n\n",
+  "event: ping\ndata: {\"type\": \"ping\"}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"The user is asking what\"}             }\n\n",
+  "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\" 2+2 equals and wants me to reply with just the number.\\n\\n2 + 2 = 4\\n\\nSo I should just respond with \\\"4\\\".\"}       }\n\n",
+  "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"\"}               }\n\n",
+  "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"Es0CCm0IDhgCKkC/Es6k8dUFqTAg7wThBDLzaM7Pokavq41fV39fEtucH8EFB6X5Hd7PrM3nxJk0PoT9Kd7dZK2hp+HIzDoixrHCMhljbGF1ZGUtaGFpa3UtNC01LTIwMjUxMDAxOABCCHRoaW5raW5nEgx+3pZFn3bNgRU0udQaDAKDggBOLrEpVsrwFiIwUmjf568C9wUrz853KFyz/YmyKOUozlBaTPOImflMwNXbPsUA+Eo8Iw8M3gEv8/EmKo0B8wkRhf49Do9u37xK/KNwsou7u3VLfMZOAwVujHdoiHdz8IWxM/Xm0bXH+dF1RPUQltVJWeUyUgJVHSsOUYdYD/S8bkVnX4Nq31dwsyQmkdR2IZHncADrwaOK8l+J72iJcNvH1CUCdDqqYt1sWAIVBbzes6sYbeXDx6K+Y3eRoXTEaKnXdmzGCYy3oh62GAE=\"}          }\n\n",
+  "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0       }\n\n",
+  "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}       }\n\n",
+  "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"4\"}        }\n\n",
+  "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1  }\n\n",
+  "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"stop_details\":null},\"usage\":{\"input_tokens\":49,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":53,\"output_tokens_details\":{\"thinking_tokens\":47}}  }\n\n",
+  "event: message_stop\ndata: {\"type\":\"message_stop\"             }\n\n",
+]
+[response.headers]
+content-type = "text/event-stream; charset=utf-8"
+cache-control = "no-cache"
+

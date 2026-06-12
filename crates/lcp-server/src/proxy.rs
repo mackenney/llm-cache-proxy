@@ -96,6 +96,14 @@ pub async fn handle(
 
     let full_path = format!("/{provider_str}/{path}");
 
+    tracing::debug!(
+        method = %method,
+        path = %full_path,
+        bypass,
+        body_bytes = body.len(),
+        "incoming request"
+    );
+
     let ctx = ProxyCtx {
         provider,
         method: method.to_string(),
@@ -203,6 +211,12 @@ pub async fn handle(
     };
 
     let status = upstream_resp.status();
+    tracing::debug!(
+        %status,
+        url = %url,
+        is_sse = upstream_resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").contains("text/event-stream"),
+        "upstream response"
+    );
     let content_type = upstream_resp
         .headers()
         .get("content-type")
@@ -270,7 +284,7 @@ pub async fn handle(
                         }
                         // Forward to client; break if client disconnected
                         if tx.send(Ok(bytes)).await.is_err() {
-                            tracing::debug!("client disconnected mid-stream");
+                            tracing::debug!(chunks = chunks_raw.len(), "client disconnected mid-stream");
                             break false; // Don't cache partial responses
                         }
                     }
@@ -279,7 +293,10 @@ pub async fn handle(
                         let _ = tx.send(Err(e)).await;
                         break false; // Don't cache on error
                     }
-                    None => break true, // Stream completed successfully
+                    None => {
+                        tracing::debug!(chunks = chunks_raw.len(), total_bytes = response_buf.len(), "upstream stream complete");
+                        break true; // Stream completed successfully
+                    }
                 }
             };
             drop(stream); // Drop stream here to satisfy SensitiveState lifetime guarantee.

@@ -1,0 +1,24 @@
+schema = 1
+provider = "anthropic"
+scenario = "dummy"
+model = "claude-haiku-4-5"
+recorded_at = "2026-06-11"
+description = "Minimal dummy cassette for infrastructure round-trip testing. Not a real recording."
+secret_kind = "anthropic"
+
+[request]
+method = "POST"
+path = "/v1/messages"
+content_type = "application/json"
+body = '{"model":"claude-haiku-4-5","max_tokens":10,"stream":true,"messages":[{"role":"user","content":"hi"}]}'
+
+[[response]]
+status = 200
+body_chunks = [
+  "event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
+  "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
+  "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+]
+
+[response.headers]
+content-type = "text/event-stream"

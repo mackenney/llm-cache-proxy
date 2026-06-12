@@ -7,12 +7,12 @@ Read this file to understand the current state of lcp. One-liner per item; all d
 ## In Progress
 
 _(none)_
+
 ## Queued
 
 ### System-prompt cache-key normalization
 
 Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, `Current working directory: …`) from the cache key so the same logical prompt gets the same key across days and directories. The forwarded request is never modified — only the bytes fed into BLAKE3 are affected. Configured via `[extensions.system_prompt_normalize]` as a list of regexes matched against the system message body.
-
 ## Completed
 
 ### Foundation
@@ -43,6 +43,9 @@ Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, 
 - SSE multi-buffer field coverage: FieldKey/ExtractedField architecture, VC-SSE-1..13 (all providers), 3-round code review, E2E verified vs real APIs — cdf8fc5
 - Body size limit: `--body-limit` / `LCP_BODY_LIMIT` (default 100 MiB, 0 = no limit), `DefaultBodyLimit` on proxy routes, 2 spec invariants + 3 integration tests — 47747de
 - Sliding-window SSE restore: `SseRestoreStream` emits incrementally per-FieldKey (max_fake_len hold), synthetic frames, spec invariant tests — e71a2b5
+- SSE terminal-event ordering fix: block+stream-scope flush before terminal frames; `classify_terminal`, `flush_accumulators_where`; 7 spec invariants + 1 integration regression test (VC-SSE-14..20) — aece11c
+- 5-round code review + E2E fixes: `is_sse_first_chunk` spaceless detection, Gemini deferred drain before terminal, `flush_safe_prefix` split-fake bug, synthetic Responses API event type names, empty-content finish_reason routing; 253 tests, all providers verified — 0bc6827
+- Cassette-based integration tier: 34 TOML fixtures (4 providers), `MockResponse::Recorded`, wire-format tests, 3 regression guards (`flush_safe_prefix`, `response.output_text.delta`, `content:"" + finish_reason`), error/concurrent/SSE-detection coverage; 198 tests total — 1377970
 
 ---
 
