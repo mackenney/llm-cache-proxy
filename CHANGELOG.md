@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`flush_safe_prefix` panic on multibyte characters** (`SseRestoreStream`): when
+  `nominal_target` (the safe-flush boundary derived from fake key lengths) landed
+  inside a multibyte codepoint — 4-byte emoji, 3-byte CJK, or 2-byte Greek — the
+  `accum[..target]` slice panicked with "end byte index N is not a char boundary".
+  The target is now walked back with `is_char_boundary` before any slice.
+  Three regression tests cover each codepoint width.
+
 - **SSE terminal-event ordering** (`SseRestoreStream`): terminal frames
   (`content_block_stop`, `message_stop`, `[DONE]`, `response.output_item.done`,
   etc.) were forwarded to the client before the held accumulator was flushed,
