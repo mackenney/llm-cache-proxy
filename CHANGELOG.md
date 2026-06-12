@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- **Cassette integration test tier** (`tests/integration/`): 34 recorded
+  fixtures spanning all four providers (Anthropic, OpenAI, OpenRouter,
+  Gemini) exercise cache hit/miss, SSE passthrough, error responses,
+  concurrent requests, and SSE detection. Tests run fully offline against a
+  mock upstream — no live API key required.
+
+### Fixed
+
+- **SSE terminal-event ordering** (`SseRestoreStream`): terminal frames
+  (`content_block_stop`, `message_stop`, `[DONE]`, `response.output_item.done`,
+  etc.) were forwarded to the client before the held accumulator was flushed,
+  truncating doppel-restored content (e.g. tool-call arguments) in the final
+  chunk. Block-scope flush now fires on Anthropic `content_block_stop`;
+  stream-scope flush fires on all other terminal events.
+
+- **`flush_safe_prefix` with embedded fake keys**: when a fake key was
+  embedded inside JSON (e.g. `partial_json={"key":"FAKE_KEY"}`), the
+  surrounding JSON bytes pushed the accumulator past `max_fake_len`. The
+  sliding window emitted the first few bytes of the fake as a separate
+  fragment, preventing Aho-Corasick from matching the complete fake — the
+  original secret was never restored. The flush boundary now retracts to
+  just before any partial-fake prefix found at the tail of the safe region.
+
+- **Responses API synthetic frame event names**: `ResponsesApiDelta` and
+  `ResponsesApiDone` synthetic frames were emitting abbreviated event types
+  (`output_text`) instead of the full standard names
+  (`response.output_text.delta` / `response.output_text.done`), breaking
+  clients that match on the standard event type strings.
+
+- **OpenRouter colocated `finish_reason`**: OpenRouter colocates
+  `{"content":""}` with a non-null `finish_reason` in the final Chat
+  Completions chunk. `extract_fields` treated the empty string as
+  extractable content, preventing `classify_terminal` from firing the
+  terminal flush. Held content was silently dropped. Empty-string content
+  is now skipped so the terminal flush fires correctly.
+
+- **Gemini `deferred_passthrough` drain**: Gemini SSE chunks that are
+  deferred for passthrough were not drained before the stream-scope terminal
+  flush, causing those chunks to be dropped on streams that end with a
+  usage-metadata-only frame.
+
 ## [0.0.3] - 2026-06-09
 
 ### Changed
