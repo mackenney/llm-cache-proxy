@@ -127,9 +127,10 @@ Initial release.
   are decompressed before hashing and forwarding.
 - Configurable upstream request timeout (`--timeout` / `LCP_TIMEOUT`;
   default 300 s; 0 = no timeout).
-- Secret swap/restore extension via `doppel`: real API keys in request bodies
-  and SSE response streams are replaced with fakes before caching and restored
-  on replay. SSE-aware restore operates at the semantic text level so secrets
+- Secret swap/restore extension via `doppel`: real API keys are replaced with
+  structurally-equivalent fakes before forwarding to the upstream — secrets
+  never reach the external provider. The cache stores the real (restored)
+  values. SSE-aware restore operates at the semantic text level so secrets
   split across multiple `data:` frames are handled correctly across all four
   providers. Enabled via `[extensions.doppel]` in the config file.
 - Extension pipeline with Phase 1/2/3 hooks and an opaque sensitive state

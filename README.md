@@ -1,6 +1,6 @@
 # lcp — LLM Cache Proxy
 
-> **⚠️ Pre-release.** Version 0.0.1 — APIs, CLI flags, config keys, and cache formats
+> **⚠️ Pre-release.** Version 0.0.x — APIs, CLI flags, config keys, and cache formats
 > **may change without notice** until a stable release is tagged.
 
 A local HTTP proxy that caches LLM API responses on disk and replays them on
@@ -96,9 +96,11 @@ with original boundaries preserved.
 ## Secret protection (doppel extension)
 
 lcp can strip your API keys and other secrets from requests before they are
-forwarded upstream and before they are written to the cache. The cache never
-stores real credentials — only structurally-equivalent fakes. Originals are
-restored transparently in the response stream.
+forwarded upstream. Secrets are never sent to the external provider — lcp
+substitutes structurally-equivalent fakes for the upstream call and restores
+the originals transparently in the response stream. The cache stores the real
+values so that cache hits work correctly without the proxy needing to map fakes
+back.
 
 This is opt-in via the `[extensions.doppel]` config block, backed by the
 [doppel](https://crates.io/crates/doppel) crate.

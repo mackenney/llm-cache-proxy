@@ -37,7 +37,7 @@ prefix and paired with a default upstream base URL:
 |---|---|---|
 | Anthropic | `anthropic` | `https://api.anthropic.com` |
 | OpenAI | `openai` | `https://api.openai.com` |
-| OpenRouter | `openrouter` | `https://openrouter.ai/api` |
+| OpenRouter | `openrouter` | `https://openrouter.ai/api/v1` |
 | Gemini | `gemini` | `https://generativelanguage.googleapis.com` |
 
 The provider registry MUST support:
@@ -55,10 +55,6 @@ path, and request body as inputs, and MUST produce a deterministic string
 output — a BLAKE3 hex digest of `method + "|" + path + "|" + normalized_body`.
 Normalization is provider-aware: the set of fields stripped from the body
 depends on the provider.
-
-> **Implementation note:** Provider-aware normalization is a planned extension.
-> The current implementation strips only `stream` and is provider-unaware.
-> The rules below describe the target behavior.
 
 Normalization rules (applied to the request body):
 1. Parse as JSON. On failure, use the raw byte sequence verbatim.
