@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+
+- Bumped `doppel` to 0.1.0: AWS AKIA/ASIA built-in patterns are now default-guarded against base64-blob false positives (same fix class as GCP in 0.0.2). Fixes a real production failure: image uploads containing an `ASIA`-shaped chance match through the doppel secret-swap extension were silently corrupted before reaching the upstream API, causing `Could not process image` errors.
+
 ## [0.0.4] - 2026-06-12
 
 ### Added
