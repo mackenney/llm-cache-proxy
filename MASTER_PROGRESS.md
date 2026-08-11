@@ -46,6 +46,7 @@ Exclude volatile lines injected by agentic harnesses (e.g. `Current date: …`, 
 - SSE terminal-event ordering fix: block+stream-scope flush before terminal frames; `classify_terminal`, `flush_accumulators_where`; 7 spec invariants + 1 integration regression test (VC-SSE-14..20) — aece11c
 - 5-round code review + E2E fixes: `is_sse_first_chunk` spaceless detection, Gemini deferred drain before terminal, `flush_safe_prefix` split-fake bug, synthetic Responses API event type names, empty-content finish_reason routing; 253 tests, all providers verified — 0bc6827
 - Cassette-based integration tier: 34 TOML fixtures (4 providers), `MockResponse::Recorded`, wire-format tests, 3 regression guards (`flush_safe_prefix`, `response.output_text.delta`, `content:"" + finish_reason`), error/concurrent/SSE-detection coverage; 198 tests total — 1377970
+- Bump `doppel` to 0.1.0: AWS AKIA/ASIA default trailing-run-guard fix, found via production image-upload corruption through the doppel secret-swap extension — 422c99f
 
 ---
 
