@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+## [0.0.5] - 2026-08-11
+
 ### Fixed
 
 - Bumped `doppel` to 0.1.0: AWS AKIA/ASIA built-in patterns are now default-guarded against base64-blob false positives (same fix class as GCP in 0.0.2). Fixes a real production failure: image uploads containing an `ASIA`-shaped chance match through the doppel secret-swap extension were silently corrupted before reaching the upstream API, causing `Could not process image` errors.
@@ -161,7 +163,8 @@ Initial release.
   (e.g. `gemini-2.5-flash` from `/models/gemini-2.5-flash:generateContent`).
 
 <!-- next-url -->
-[Unreleased]: https://github.com/mackenney/llm-cache-proxy/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/mackenney/llm-cache-proxy/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/mackenney/llm-cache-proxy/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/mackenney/llm-cache-proxy/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/mackenney/llm-cache-proxy/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/mackenney/llm-cache-proxy/compare/v0.0.1...v0.0.2
